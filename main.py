@@ -75,7 +75,7 @@ async def health(req: Request):
 
 
 def _extract_first_url(text: str) -> Optional[str]:
-    m = re.search(r"https?://[\w-.~:/?#\[\]@!$&'()*+,;=%]+", text)
+    m = re.search(r"https?://[\w\-.~:/?#\[\]@!$&'()*+,;=%]+", text)
     if m:
         return m.group(0)
     return None
