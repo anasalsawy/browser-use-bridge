@@ -1,4 +1,5 @@
 import express from "express";
+import http from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -24,7 +25,9 @@ function authorized(req) {
   return h === `Bearer ${EXEC_TOKEN}`;
 }
 
-app.get("/health", (req, res) => res.json({ ok: true, service: "vm-shell-mcp", port: PORT }));
+app.get("/health", (req, res) => {
+  res.json({ ok: true, service: "vm-shell-mcp", port: PORT });
+});
 
 function makeServer() {
   const server = new McpServer({ name: "vm-shell", version: "1.0.0" });
@@ -33,9 +36,9 @@ function makeServer() {
     "vm_exec",
     "Execute a shell command on the connected Linux VM. Returns stdout, stderr, exit code, and whether the command timed out.",
     {
-      command: z.string().min(1).describe("Shell command to execute on the VM"),
-      cwd: z.string().optional().describe("Working directory; defaults to VM_WORKDIR"),
-      timeout_ms: z.number().int().min(1000).max(MAX_TIMEOUT_MS).optional().describe("Command timeout in milliseconds")
+      command: z.string().min(1),
+      cwd: z.string().optional(),
+      timeout_ms: z.number().int().min(1000).max(MAX_TIMEOUT_MS).optional()
     },
     async ({ command, cwd, timeout_ms }) => {
       const timeout = timeout_ms ?? Math.min(60000, MAX_TIMEOUT_MS);
@@ -74,7 +77,6 @@ function makeServer() {
   return server;
 }
 
-// MCP endpoint. Authentication is checked before handing the request to MCP.
 app.all("/mcp", async (req, res) => {
   if (!authorized(req)) {
     res.status(401).json({ error: "Unauthorized" });
@@ -93,7 +95,12 @@ app.all("/mcp", async (req, res) => {
   }
 });
 
-app.listen(PORT, "127.0.0.1", () => {
+const httpServer = http.createServer(app);
+httpServer.on("error", (error) => {
+  console.error("HTTP server error:", error);
+  process.exitCode = 1;
+});
+httpServer.listen(PORT, "127.0.0.1", () => {
   console.log(`VM shell MCP listening on http://127.0.0.1:${PORT}/mcp`);
   console.log(`Health: http://127.0.0.1:${PORT}/health`);
 });
