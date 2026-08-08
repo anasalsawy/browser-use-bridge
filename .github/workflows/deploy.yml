@@ -17,18 +17,28 @@ jobs:
           key: ${{ secrets.VM_SSH_KEY }}
           script_stop: true
           script: |
-            set -e
+            set -euxo pipefail
+            echo '=== VM CONNECTED ==='
+            hostname
+            echo '=== REPO ==='
             cd /home/azureuser/browser-use-bridge
             git fetch origin main
             git reset --hard origin/main
+            echo '=== NODE ==='
+            node --version || true
             if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
               curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
               sudo apt-get install -y nodejs
             fi
+            echo '=== INSTALL ==='
             npm install --omit=dev
+            echo '=== SERVICE ==='
             sudo systemctl daemon-reload
             sudo systemctl enable vm-shell-mcp
             sudo systemctl restart vm-shell-mcp
-            sleep 2
+            sleep 3
             sudo systemctl is-active --quiet vm-shell-mcp
+            echo '=== HEALTH ==='
             curl -fsS http://127.0.0.1:8800/health
+            echo
+            echo '=== DEPLOY OK ==='
