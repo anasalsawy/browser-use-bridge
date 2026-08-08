@@ -20,25 +20,34 @@ jobs:
             set -euxo pipefail
             echo '=== VM CONNECTED ==='
             hostname
-            echo '=== REPO ==='
             cd /home/azureuser/browser-use-bridge
             git fetch origin main
             git reset --hard origin/main
             echo '=== NODE ==='
             node --version || true
-            if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
+            if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 20 ]; then
+              :
+            else
               curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
               sudo apt-get install -y nodejs
             fi
             echo '=== INSTALL ==='
             npm install --omit=dev
-            echo '=== SERVICE ==='
+            echo '=== SERVICE FILE ==='
+            sudo systemctl cat vm-shell-mcp || true
+            echo '=== RESTART ==='
             sudo systemctl daemon-reload
             sudo systemctl enable vm-shell-mcp
             sudo systemctl restart vm-shell-mcp
             sleep 3
-            sudo systemctl is-active --quiet vm-shell-mcp
-            echo '=== HEALTH ==='
-            curl -fsS http://127.0.0.1:8800/health
-            echo
-            echo '=== DEPLOY OK ==='
+            echo '=== STATUS ==='
+            sudo systemctl status vm-shell-mcp --no-pager -l || true
+            echo '=== PORTS ==='
+            sudo ss -ltnp | grep -E ':8799|:8800' || true
+            echo '=== HEALTH 8800 ==='
+            curl -iS http://127.0.0.1:8800/health || true
+            echo '=== HEALTH 8799 ==='
+            curl -iS http://127.0.0.1:8799/health || true
+            echo '=== RECENT LOG ==='
+            sudo journalctl -u vm-shell-mcp -n 30 --no-pager || true
+            echo '=== DEPLOY DIAGNOSTICS COMPLETE ==='
