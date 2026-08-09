@@ -9,9 +9,11 @@ User=azureuser
 WorkingDirectory=/home/azureuser/browser-use-bridge/travel-sales-agent
 EnvironmentFile=-/etc/leadpilotai.env
 EnvironmentFile=-/etc/leadpilotai/agent.env
+EnvironmentFile=-/home/azureuser/browser-use-bridge/.env
 Environment="TRAVEL_AGENT_PORT=8890"
-Environment="AI_BASE_URL=https://api.featherless.ai/v1"
-Environment="AI_MODEL=Qwen/Qwen3-32B"
+Environment="AI_BASE_URL=https://router.huggingface.co/v1"
+Environment="AI_MODEL=openai/gpt-oss-120b:fastest"
+Environment="AI_PROVIDER=huggingface"
 ExecStart=/usr/bin/node /home/azureuser/browser-use-bridge/travel-sales-agent/server.mjs
 Restart=always
 RestartSec=5
