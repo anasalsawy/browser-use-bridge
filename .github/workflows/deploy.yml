@@ -24,13 +24,18 @@ jobs:
             node --version
             npm install --omit=dev
 
-            echo '=== VERIFY HF TOKEN ==='
+            echo '=== VERIFY AI TOKEN ==='
             test -f /home/azureuser/browser-use-bridge/.env
-            grep -q '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env
-            sudo mkdir -p /etc/leadpilotai
-            sudo grep '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env | sudo tee /etc/leadpilotai/agent.env >/dev/null
-            sudo chmod 640 /etc/leadpilotai/agent.env
-            sudo chown root:azureuser /etc/leadpilotai/agent.env
+            if grep -q '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env; then
+              grep '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env | sudo tee /etc/leadpilotai-agent.env >/dev/null
+            elif grep -q '^AI_API_KEY=' /home/azureuser/browser-use-bridge/.env; then
+              grep '^AI_API_KEY=' /home/azureuser/browser-use-bridge/.env | sed 's/^AI_API_KEY=/HF_TOKEN=/' | sudo tee /etc/leadpilotai-agent.env >/dev/null
+            else
+              echo 'ERROR: neither HF_TOKEN nor AI_API_KEY exists in browser-use-bridge/.env'
+              exit 1
+            fi
+            sudo chmod 640 /etc/leadpilotai-agent.env
+            sudo chown root:azureuser /etc/leadpilotai-agent.env
 
             echo '=== INSTALL/RESTART AGENT ==='
             sudo cp travel-sales-agent/travel-sales-agent.service /etc/systemd/system/travel-sales-agent.service
