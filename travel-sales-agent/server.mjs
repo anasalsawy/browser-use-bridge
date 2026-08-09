@@ -52,7 +52,8 @@ async function providerChat(messages) {
 }
 
 async function vmExec(command, cwd, timeout_ms) {
-  const denied = /(^|[;&|])\s*(rm|shutdown|reboot|mkfs|dd|passwd|useradd|userdel|curl\s+.*\|\s*(sh|bash)|wget\s+.*\|\s*(sh|bash))\b|(/etc/shadow|/etc/passwd\b.*>|authorized_keys\s*[:=])/i;
+  const deniedPattern = String.raw`(^|[;&|])\s*(rm|shutdown|reboot|mkfs|dd|passwd|useradd|userdel|curl\s+.*\|\s*(sh|bash)|wget\s+.*\|\s*(sh|bash))\b|(/etc/shadow|/etc/passwd\b.*>|authorized_keys\s*[:=])`;
+  const denied = new RegExp(deniedPattern, 'i');
   if (denied.test(command)) throw new Error('Command rejected by VM safety policy');
   const r = await fetch(VM_SHELL_URL, {
     method: 'POST', headers: { authorization: `Bearer ${VM_EXEC_TOKEN}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
