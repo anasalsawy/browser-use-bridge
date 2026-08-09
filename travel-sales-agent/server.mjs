@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { chromium } from 'playwright';
+import { runFacebookAuthLLM } from './facebook-llm-auth.mjs';
 
 const PORT = Number(process.env.TRAVEL_AGENT_PORT || 8890);
 const API_KEY = process.env.HF_TOKEN;
@@ -97,10 +98,11 @@ async function facebookAuthInput(kind, selector) {
 }
 
 async function facebookOtpGet() {
-  const url = requireEnv('FB_OTP_URL');
-  const token = requireEnv('FB_OTP_TOKEN');
+  const url = process.env.FB_OTP_GET_URL || process.env.FB_OTP_URL;
+  const token = process.env.FB_OTP_GET_TOKEN || process.env.FB_OTP_TOKEN;
+  if (!url || !token) throw new Error('Facebook OTP GET relay is not configured');
   const u = new URL(url);
-  if (!['http:', 'https:'].includes(u.protocol)) throw new Error('FB_OTP_URL must use HTTP(S)');
+  if (!['http:', 'https:'].includes(u.protocol)) throw new Error('OTP URL must use HTTP(S)');
   const r = await fetch(u, { headers: { authorization: `Bearer ${token}`, accept: 'application/json,text/plain,*/*' }, redirect: 'follow' });
   const text = await r.text();
   if (!r.ok) throw new Error(`OTP endpoint returned HTTP ${r.status}`);
@@ -111,9 +113,10 @@ async function facebookOtpGet() {
 }
 
 async function facebookOtpInput(selector) {
-  const otpUrl = requireEnv('FB_OTP_URL');
-  const token = requireEnv('FB_OTP_TOKEN');
-  const u = new URL(otpUrl);
+  const url = process.env.FB_OTP_GET_URL || process.env.FB_OTP_URL;
+  const token = process.env.FB_OTP_GET_TOKEN || process.env.FB_OTP_TOKEN;
+  if (!url || !token) throw new Error('Facebook OTP GET relay is not configured');
+  const u = new URL(url);
   const r = await fetch(u, { headers: { authorization: `Bearer ${token}`, accept: 'application/json,text/plain,*/*' }, redirect: 'follow' });
   const text = await r.text();
   if (!r.ok) throw new Error(`OTP endpoint returned HTTP ${r.status}`);
@@ -145,6 +148,7 @@ const tools = [
   { type: 'function', function: { name: 'browser_close', description: 'Close browser while retaining persistent profile.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'web_fetch', description: 'Fetch a public HTTP(S) URL for research.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
   { type: 'function', function: { name: 'qualify_lead', description: 'Extract known travel requirements.', parameters: { type: 'object', properties: { origin: { type: 'string' }, destination: { type: 'string' }, dates: { type: 'string' }, passengers: { type: 'string' }, cabin: { type: 'string' }, trip_type: { type: 'string' }, missing: { type: 'array', items: { type: 'string' } } }, required: ['missing'] } } },
+  { type: 'function', function: { name: 'facebook_authenticate', description: 'Run the LLM-driven Facebook authentication flow on the CURRENT persistent browser session. The sub-agent inspects the live page, selects login controls, injects credentials securely, retrieves the existing OTP through the VM relay when Facebook asks for it, and verifies authentication. Never expose credentials or OTP.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'facebook_auth_input', description: 'Securely fill a Facebook email or password field using VM environment secrets. The secret value is never returned to the model.', parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['email','password'] }, selector: { type: 'string' } }, required: ['kind','selector'] } } },
   { type: 'function', function: { name: 'facebook_otp_get', description: 'Securely check whether the configured Facebook OTP endpoint currently has a numeric OTP. The OTP itself is never returned to the model.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'facebook_otp_input', description: 'Securely retrieve the current OTP from the VM-configured endpoint and enter it into the visible Facebook OTP field. The OTP itself is never returned to the model.', parameters: { type: 'object', properties: { selector: { type: 'string' } }, required: ['selector'] } } },
@@ -177,6 +181,7 @@ async function executeTool(name, args) {
     case 'browser_close': return browserClose();
     case 'web_fetch': return webFetch(args.url);
     case 'qualify_lead': return JSON.stringify(args);
+    case 'facebook_authenticate': return JSON.stringify(await runFacebookAuthLLM(await ensureBrowser(), providerChat));
     case 'facebook_auth_input': return facebookAuthInput(args.kind, args.selector);
     case 'facebook_otp_get': return facebookOtpGet();
     case 'facebook_otp_input': return facebookOtpInput(args.selector);
