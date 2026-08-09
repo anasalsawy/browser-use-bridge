@@ -20,7 +20,11 @@ export async function runFacebookAuthLLM(page, providerChat) {
     const emailField = await page.locator('input[name="email"], input[type="email"]').filter({ visible: true }).count().catch(() => 0);
     const passwordField = await page.locator('input[name="pass"], input[type="password"]').filter({ visible: true }).count().catch(() => 0);
     const loginForm = emailField > 0 || passwordField > 0;
-    return { ok: true, authenticated: /facebook\.com/i.test(s.url) && !loginUrl && !loginForm && !checkpoint, checkpoint, login_form: loginForm, url: s.url, title: s.title };
+    const cookies = await page.context().cookies('https://www.facebook.com').catch(() => []);
+    const hasUserCookie = cookies.some(c => c.name === 'c_user' && Boolean(c.value));
+    const hasSessionCookie = cookies.some(c => c.name === 'xs' && Boolean(c.value));
+    const authenticated = /facebook\.com/i.test(s.url) && hasUserCookie && hasSessionCookie && !loginUrl && !loginForm && !checkpoint;
+    return { ok: true, authenticated, checkpoint, login_form: loginForm, cookie_session: hasUserCookie && hasSessionCookie, url: s.url, title: s.title };
   };
   const otp = async () => {
     const url = process.env.FB_OTP_GET_URL || process.env.FB_OTP_URL;
@@ -34,18 +38,31 @@ export async function runFacebookAuthLLM(page, providerChat) {
     if (!/^\d{4,8}$/.test(code)) throw new Error('OTP relay did not return a numeric OTP');
     return code;
   };
+
+  // Establish the correct Facebook page before the LLM takes control. The LLM still
+  // makes every authentication decision and every credential/OTP action.
+  const before = await status();
+  if (!before.authenticated && !before.checkpoint) {
+    await page.goto('https://www.facebook.com/login/', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+  }
+
   const messages = [
-    { role: 'system', content: 'You are ONLY the Facebook authentication sub-agent. Operate the CURRENT persistent browser page. You have only authentication/browser tools. First inspect the page. If already authenticated, verify and stop. If login is needed, navigate to Facebook login, inspect the live page, identify visible email/password controls from the snapshot, securely fill them with facebook_auth_input, submit using an observed visible control or Enter, inspect the result, and only if Facebook visibly requests a verification code use facebook_otp_get then facebook_otp_input. Never request, expose, repeat, or infer credentials or OTP values. If Facebook presents CAPTCHA, checkpoint, identity confirmation, or another human-only challenge, stop and report blocked. Finish with facebook_auth_status.' },
-    { role: 'user', content: 'Authenticate Facebook now using the current persistent browser. Begin with browser_snapshot.' }
+    { role: 'system', content: 'You are ONLY the Facebook authentication sub-agent. Operate the CURRENT persistent browser page. First inspect the live page. If already authenticated, verify and stop. If login is needed, use the live page to identify visible email/password controls from the snapshot, securely fill them with facebook_auth_input, submit using an observed visible control or Enter, inspect the result, and only if Facebook visibly requests a verification code use facebook_otp_get then facebook_otp_input. Never request, expose, repeat, or infer credentials or OTP values. If Facebook presents CAPTCHA, checkpoint, identity confirmation, or another human-only challenge, stop and report blocked. Finish with facebook_auth_status.' },
+    { role: 'user', content: 'Authenticate Facebook now. Begin with browser_snapshot and use the current persistent session.' }
   ];
-  for (let round = 0; round < 12; round++) {
+
+  for (let round = 0; round < 16; round++) {
+    const current = await status();
+    if (current.authenticated) return current;
+    if (current.checkpoint) return current;
+
     const result = await providerChat(messages, AUTH_TOOLS);
     const msg = result.choices?.[0]?.message;
     if (!msg) throw new Error('LLM returned no message');
     messages.push(msg);
     if (!msg.tool_calls?.length) {
       const s = await status();
-      if (s.authenticated) return s;
+      if (s.authenticated || s.checkpoint) return s;
       throw new Error(`LLM stopped before Facebook authentication completed: ${msg.content || 'no tool call'}`);
     }
     for (const call of msg.tool_calls) {
