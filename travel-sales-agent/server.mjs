@@ -12,12 +12,12 @@ const PROVIDER = process.env.AI_PROVIDER || 'huggingface';
 const SYSTEM_PROMPT = `You are an elite travel sales specialist for Your Travel Agent. Qualify flight leads, gather origin, destination, dates, passenger count, cabin, and trip type. Be warm, professional, transparent, and never invent flight availability, prices, bookings, payment receipt, or credentials. The business targets very competitive fares; only claim a specific discount when supported by an actual quote. For a new lead, ask only the missing qualification questions and keep the conversation concise.`;
 
 if (!API_KEY) {
-  console.error('HF_TOKEN or AI_API_KEY is required');
+  console.error('HF_TOKEN is required');
   process.exit(1);
 }
 
 async function aiChat(messages, tools) {
-  const errors = [];
+  let lastError;
   for (const model of MODELS) {
     try {
       const body = { model, messages, max_tokens: 1200, temperature: 0.3 };
@@ -29,33 +29,26 @@ async function aiChat(messages, tools) {
       });
       const text = await r.text();
       if (!r.ok) {
-        errors.push(`${model}: HTTP ${r.status} ${text.slice(0, 500)}`);
+        lastError = new Error(`AI provider ${r.status} using ${model}: ${text.slice(0, 1000)}`);
         continue;
       }
-      return { ...JSON.parse(text), _agent_model: model };
-    } catch (e) {
-      errors.push(`${model}: ${e.message}`);
-    }
+      const result = JSON.parse(text);
+      if (!result?.choices?.[0]?.message) throw new Error(`Invalid AI response from ${model}`);
+      return result;
+    } catch (e) { lastError = e; }
   }
-  throw new Error(`All Hugging Face models failed: ${errors.join(' | ')}`);
+  throw lastError || new Error('All AI models failed');
 }
 
-const tools = [{
-  type: 'function',
-  function: {
-    name: 'qualify_lead',
-    description: 'Extract the travel requirements known so far from a lead message.',
-    parameters: {
-      type: 'object',
-      properties: {
-        origin: { type: 'string' }, destination: { type: 'string' }, dates: { type: 'string' },
-        passengers: { type: 'string' }, cabin: { type: 'string' }, trip_type: { type: 'string' },
-        missing: { type: 'array', items: { type: 'string' } }
-      },
-      required: ['missing']
-    }
-  }
-}];
+const tools = [{ type: 'function', function: {
+  name: 'qualify_lead',
+  description: 'Extract the travel requirements known so far from a lead message.',
+  parameters: { type: 'object', properties: {
+    origin: { type: 'string' }, destination: { type: 'string' }, dates: { type: 'string' },
+    passengers: { type: 'string' }, cabin: { type: 'string' }, trip_type: { type: 'string' },
+    missing: { type: 'array', items: { type: 'string' } }
+  }, required: ['missing'] }
+} }];
 
 async function handleChat(payload) {
   const messages = [
@@ -71,7 +64,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, service: 'travel-sales-agent', models: MODELS, provider: PROVIDER }));
+      res.end(JSON.stringify({ ok: true, service: 'travel-sales-agent', model: MODELS[0], provider: PROVIDER }));
       return;
     }
     if (req.method === 'POST' && req.url === '/chat') {
