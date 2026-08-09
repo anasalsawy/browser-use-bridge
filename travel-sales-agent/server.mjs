@@ -31,6 +31,9 @@ async function ensureBrowser() {
     const context = await chromium.launchPersistentContext(PROFILE_DIR, {
       headless: true,
       viewport: { width: 1440, height: 1000 },
+      handleSIGTERM: false,
+      handleSIGINT: false,
+      handleSIGHUP: false,
       args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
     });
     if (shuttingDown) {
@@ -152,7 +155,8 @@ async function facebookOtpInput(selector) {
   try { const d = JSON.parse(text); code = String(d.code ?? d.otp ?? d.token ?? d.value ?? ''); } catch { code = text.trim(); }
   if (!/^\d{4,8}$/.test(code)) throw new Error('OTP endpoint did not return a numeric OTP');
   const page = await ensureBrowser();
-  await page.locator(selector).filter({ visible: true }).first().fill(code, { timeout: 20000 });
+  const field = page.locator(selector).filter({ visible: true }).first();
+  await field.fill(code, { timeout: 20000 });
   return JSON.stringify({ ok: true, otp_entered: true });
 }
 
@@ -161,9 +165,14 @@ async function facebookAuthStatus() {
   const url = page.url();
   const title = await page.title();
   const text = await page.locator('body').innerText({ timeout: 10000 }).catch(() => '');
-  const loginSignals = /login|log in|create new account/i.test(text) && /facebook\.com/i.test(url);
-  const checkpoint = /checkpoint|confirm your identity|security check|captcha/i.test(text);
-  return JSON.stringify({ ok: true, authenticated: /facebook\.com/i.test(url) && !loginSignals && !checkpoint, checkpoint, url, title });
+  const blob = `${url}\n${title}\n${text}`;
+  const checkpoint = /checkpoint|confirm your identity|security check|captcha/i.test(blob);
+  const loginUrl = /facebook\.com/i.test(url) && /\/login(?:[/?#]|$)/i.test(url);
+  const emailField = await page.locator('input[name="email"], input[type="email"]').filter({ visible: true }).count().catch(() => 0);
+  const passwordField = await page.locator('input[name="pass"], input[type="password"]').filter({ visible: true }).count().catch(() => 0);
+  const loginForm = emailField > 0 || passwordField > 0;
+  const authenticated = /facebook\.com/i.test(url) && !loginUrl && !loginForm && !checkpoint;
+  return JSON.stringify({ ok: true, authenticated, checkpoint, login_form: loginForm, url, title });
 }
 
 const tools = [
@@ -183,11 +192,11 @@ const tools = [
   { type: 'function', function: { name: 'facebook_auth_status', description: 'Check whether the current persistent Facebook browser page appears authenticated.', parameters: { type: 'object', properties: {} } } }
 ];
 
-async function providerChat(messages) {
+async function providerChat(messages, availableTools = tools) {
   let lastError;
   for (const model of MODELS) {
     try {
-      const r = await fetch(`${BASE_URL}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${API_KEY}` }, body: JSON.stringify({ model, messages, tools, tool_choice: 'auto', max_tokens: 1800, temperature: 0.2 }) });
+      const r = await fetch(`${BASE_URL}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${API_KEY}` }, body: JSON.stringify({ model, messages, tools: availableTools, tool_choice: 'auto', max_tokens: 1800, temperature: 0.2 }) });
       const text = await r.text();
       if (!r.ok) { lastError = new Error(`AI provider ${r.status} using ${model}: ${text.slice(0, 1000)}`); continue; }
       const result = JSON.parse(text);
@@ -267,7 +276,10 @@ async function shutdown(signal) {
     browserContext = null;
     browserPage = null;
     browserInitPromise = null;
-    if (context) await context.close().catch(err => console.error('Browser close error:', err.message));
+    if (context) {
+      const closePromise = context.close().catch(err => console.error('Browser close error:', err.message));
+      await Promise.race([closePromise, new Promise(resolve => setTimeout(resolve, 3000))]);
+    }
     console.log('Travel sales agent shutdown complete.');
   })();
   await shutdownPromise;

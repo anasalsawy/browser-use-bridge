@@ -17,6 +17,9 @@ Environment="AI_PROVIDER=huggingface"
 ExecStart=/usr/bin/node /home/azureuser/browser-use-bridge/travel-sales-agent/server.mjs
 Restart=always
 RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+SendSIGKILL=yes
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
