@@ -21,21 +21,18 @@ jobs:
             cd /home/azureuser/browser-use-bridge
             git fetch origin main
             git reset --hard origin/main
-            node --version
-            npm install --omit=dev
+            echo '=== NODE ==='
+            /usr/bin/node --version
 
             echo '=== VERIFY AI TOKEN ==='
             test -f /home/azureuser/browser-use-bridge/.env
-            if grep -q '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env; then
-              grep '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env | sudo tee /etc/leadpilotai-agent.env >/dev/null
-            elif grep -q '^AI_API_KEY=' /home/azureuser/browser-use-bridge/.env; then
-              grep '^AI_API_KEY=' /home/azureuser/browser-use-bridge/.env | sed 's/^AI_API_KEY=/HF_TOKEN=/' | sudo tee /etc/leadpilotai-agent.env >/dev/null
-            else
-              echo 'ERROR: neither HF_TOKEN nor AI_API_KEY exists in browser-use-bridge/.env'
-              exit 1
-            fi
+            grep '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env >/dev/null || { echo 'ERROR: HF_TOKEN missing'; exit 1; }
+            grep '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env | sudo tee /etc/leadpilotai-agent.env >/dev/null
             sudo chmod 640 /etc/leadpilotai-agent.env
             sudo chown root:azureuser /etc/leadpilotai-agent.env
+
+            echo '=== VERIFY VM EXEC TOKEN ==='
+            grep '^VM_EXEC_TOKEN=' /home/azureuser/browser-use-bridge/.env >/dev/null || { echo 'ERROR: VM_EXEC_TOKEN missing'; exit 1; }
 
             echo '=== INSTALL/RESTART AGENT ==='
             sudo cp travel-sales-agent/travel-sales-agent.service /etc/systemd/system/travel-sales-agent.service
@@ -49,9 +46,9 @@ jobs:
             curl -fsS http://127.0.0.1:8890/health
             echo
 
-            echo '=== REAL AI TEST ==='
-            RESPONSE="$(curl -fsS --max-time 90 -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"I need one economy ticket from Cairo to Houston on August 20. Reply with a short professional qualification question."}')"
+            echo '=== AI + VM TOOL TEST ==='
+            RESPONSE="$(curl -fsS --max-time 90 -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"Use the vm_exec tool to run: printf BROWSER_BRIDGE_WORKING. Then reply with exactly the tool output."}')"
             printf '%s\n' "$RESPONSE"
-            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content"); assert c and len(c.strip())>0, d; print("AI_RESPONSE_OK")' "$RESPONSE"
+            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); assert "BROWSER_BRIDGE_WORKING" in c, d; print("AI_VM_TOOL_OK")' "$RESPONSE"
 
             echo '=== AGENT WORKING ==='
