@@ -4,6 +4,7 @@ const AUTH_TOOLS = [
   { type: 'function', function: { name: 'browser_click', description: 'Click a visible element identified from the current snapshot. Prefer the exact selector supplied by the snapshot.', parameters: { type: 'object', properties: { selector: { type: 'string' } }, required: ['selector'] } } },
   { type: 'function', function: { name: 'browser_press', description: 'Press a key on a visible element identified from the current snapshot.', parameters: { type: 'object', properties: { selector: { type: 'string' }, key: { type: 'string' } }, required: ['selector','key'] } } },
   { type: 'function', function: { name: 'facebook_auth_input', description: 'Securely fill the observed Facebook email or password field using VM credentials. Never expose the secret.', parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['email','password'] }, selector: { type: 'string' } }, required: ['kind','selector'] } } },
+  { type: 'function', function: { name: 'facebook_sms_select', description: 'Select the visible Facebook SMS/text-message verification option. Use this instead of authenticator-app verification whenever SMS/text is visible.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'facebook_otp_get', description: 'Check whether the configured VM OTP relay has a numeric OTP without returning it. Use only AFTER SMS/text verification has been selected.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'facebook_otp_input', description: 'Securely retrieve the current OTP and fill the observed Facebook OTP field. Use only AFTER SMS/text verification has been selected. Never expose the OTP.', parameters: { type: 'object', properties: { selector: { type: 'string' } }, required: ['selector'] } } },
   { type: 'function', function: { name: 'facebook_auth_status', description: 'Verify the current Facebook authentication state.', parameters: { type: 'object', properties: {} } } }
@@ -58,7 +59,7 @@ export async function runFacebookAuthLLM(page, providerChat) {
     const hasUserCookie = cookies.some(c => c.name === 'c_user' && Boolean(c.value));
     const hasSessionCookie = cookies.some(c => c.name === 'xs' && Boolean(c.value));
     const authenticated = /facebook\.com/i.test(s.url) && hasUserCookie && hasSessionCookie && !loginUrl && !loginForm && !checkpoint && !captcha;
-    return { ok: true, authenticated, checkpoint, captcha, sms_option, sms_selected: smsSelected, login_form: loginForm, cookie_session: hasUserCookie && hasSessionCookie, url: s.url, title: s.title };
+    return { ok: true, authenticated, checkpoint, captcha, sms_option, sms_selected: smsSelected, cookie_session: hasUserCookie && hasSessionCookie, login_form: loginForm, url: s.url, title: s.title };
   };
 
   const otp = async () => {
@@ -75,11 +76,22 @@ export async function runFacebookAuthLLM(page, providerChat) {
     return code;
   };
 
+  const selectSms = async () => {
+    const s = await snapshot();
+    const candidates = s.interactive.filter(x => /sms|text message|text me|send.*code.*phone|phone.*code/i.test(`${x.aria_label || ''} ${x.text || ''} ${x.value || ''}`));
+    if (!candidates.length) throw new Error('Facebook did not expose a visible SMS/text verification option');
+    const candidate = candidates[0];
+    await page.locator(candidate.selector).filter({ visible: true }).first().click({ timeout: 20000 });
+    await page.waitForTimeout(1500);
+    smsSelected = true;
+    return await snapshot();
+  };
+
   const before = await status();
   if (!before.authenticated && !before.checkpoint) await page.goto('https://www.facebook.com/login/', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
 
   const messages = [
-    { role: 'system', content: 'You are ONLY the Facebook authentication sub-agent. You MUST operate the CURRENT persistent browser page with tool calls; prose-only responses are invalid. First call browser_snapshot. If already authenticated, call facebook_auth_status and stop. If login is needed, use the snapshot interactive selectors and securely fill email/password with facebook_auth_input, submit using an observed visible control or Enter, then inspect the result. IMPORTANT: if Facebook presents a verification/checkpoint screen with multiple verification methods, inspect the visible choices and SELECT SMS/TEXT MESSAGE verification when it is available. Do NOT select authenticator-app verification when SMS/text is available. Use the exact selector for the SMS/text option from browser_snapshot. After selecting SMS/text, wait for the code request to complete, call facebook_otp_get to confirm the configured VM relay has a numeric code, then call facebook_otp_input on the observed OTP field and continue. Never request, expose, repeat, or infer credentials or OTP values. Do not stop merely because the page contains the word checkpoint: a verification checkpoint is actionable when an SMS/text option is visible. Stop only for a CAPTCHA or genuinely human-only identity challenge with no usable SMS verification path. Finish with facebook_auth_status.' },
+    { role: 'system', content: 'You are ONLY the Facebook authentication sub-agent. You MUST operate the CURRENT persistent browser page with tool calls; prose-only responses are invalid. First call browser_snapshot. If already authenticated, call facebook_auth_status and stop. If login is needed, use the snapshot interactive selectors and securely fill email/password with facebook_auth_input, submit using an observed visible control or Enter, then inspect the result. IMPORTANT: if Facebook presents a verification/checkpoint screen with multiple verification methods, inspect the visible choices and SELECT SMS/TEXT MESSAGE verification when it is available by calling facebook_sms_select. Do NOT select authenticator-app verification when SMS/text is available. After facebook_sms_select succeeds, wait for the code request to complete, call facebook_otp_get to confirm the configured VM relay has a numeric code, then call facebook_otp_input on the observed OTP field and continue. Never request, expose, repeat, or infer credentials or OTP values. Do not stop merely because the page contains the word checkpoint: a verification checkpoint is actionable when an SMS/text option is visible. Stop only for a CAPTCHA or genuinely human-only identity challenge with no usable SMS verification path. Finish with facebook_auth_status.' },
     { role: 'user', content: 'Authenticate Facebook now. Begin by calling browser_snapshot. If a verification method screen appears, choose SMS/text verification when available. Every response must contain a tool call.' }
   ];
 
@@ -89,7 +101,7 @@ export async function runFacebookAuthLLM(page, providerChat) {
     if (current.captcha) return current;
     if (current.checkpoint && !current.sms_option) return current;
 
-    const result = await providerChat(messages, AUTH_TOOLS);
+    const result = await providerChat(messages, AUTH_TOOLS, { tool_choice: 'required', parallel_tool_calls: false });
     const msg = result.choices?.[0]?.message;
     if (!msg) throw new Error('LLM returned no message');
     messages.push(msg);
@@ -111,14 +123,9 @@ export async function runFacebookAuthLLM(page, providerChat) {
           case 'browser_navigate': await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 60000 }); output = await snapshot(); break;
           case 'browser_snapshot': output = await snapshot(); break;
           case 'browser_click': {
-            const selectorText = String(args.selector || '');
-            if (/sms|text message|text me|phone.*code|code.*phone/i.test(selectorText)) smsSelected = true;
             await page.locator(args.selector).filter({ visible: true }).first().click({ timeout: 20000 });
             await page.waitForTimeout(1200);
-            const afterClick = await snapshot();
-            const afterBlob = `${afterClick.text} ${afterClick.interactive.map(x => `${x.aria_label || ''} ${x.text || ''}`).join(' ')}`;
-            if (smsSelected && !/sms|text message|text me|phone.*code|code.*phone/i.test(afterBlob)) smsSelected = true;
-            output = afterClick;
+            output = await snapshot();
             break;
           }
           case 'browser_press': await page.locator(args.selector).filter({ visible: true }).first().press(args.key, { timeout: 20000 }); await page.waitForTimeout(1200); output = await snapshot(); break;
@@ -127,6 +134,7 @@ export async function runFacebookAuthLLM(page, providerChat) {
             await page.locator(args.selector).filter({ visible: true }).first().fill(value, { timeout: 20000 });
             output = { ok: true, kind: args.kind, filled: true }; break;
           }
+          case 'facebook_sms_select': output = await selectSms(); break;
           case 'facebook_otp_get': await otp(); output = { ok: true, otp_available: true }; break;
           case 'facebook_otp_input': { const code = await otp(); await page.locator(args.selector).filter({ visible: true }).first().fill(code, { timeout: 20000 }); output = { ok: true, otp_entered: true }; break; }
           case 'facebook_auth_status': output = await status(); break;
