@@ -1,15 +1,4 @@
 export async function runFacebookAuthLLM(page, providerChat) {
-  const tools = [
-    { type: 'function', function: { name: 'browser_navigate', description: 'Navigate the current persistent browser page.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
-    { type: 'function', function: { name: 'browser_snapshot', description: 'Inspect the current visible Facebook page. Return only non-secret visible text.', parameters: { type: 'object', properties: {} } } },
-    { type: 'function', function: { name: 'browser_click', description: 'Click a visible element selected from the current snapshot.', parameters: { type: 'object', properties: { selector: { type: 'string' } }, required: ['selector'] } } },
-    { type: 'function', function: { name: 'browser_press', description: 'Press a key on a visible element.', parameters: { type: 'object', properties: { selector: { type: 'string' }, key: { type: 'string' } }, required: ['selector','key'] } } },
-    { type: 'function', function: { name: 'facebook_auth_input', description: 'Securely fill Facebook email or password from VM environment secrets. Never returns the secret.', parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['email','password'] }, selector: { type: 'string' } }, required: ['kind','selector'] } } },
-    { type: 'function', function: { name: 'facebook_otp_get', description: 'Securely check the configured OTP GET endpoint. Never returns the OTP.', parameters: { type: 'object', properties: {} } } },
-    { type: 'function', function: { name: 'facebook_otp_input', description: 'Securely fetch the current OTP and enter it into the visible OTP field. Never returns the OTP.', parameters: { type: 'object', properties: { selector: { type: 'string' } }, required: ['selector'] } } },
-    { type: 'function', function: { name: 'facebook_auth_status', description: 'Verify whether Facebook is authenticated in the current persistent browser.', parameters: { type: 'object', properties: {} } } }
-  ];
-
   const secret = (name) => { if (!process.env[name]) throw new Error(`${name} is not configured on the VM`); return process.env[name]; };
   const snapshot = async () => ({ ok: true, url: page.url(), title: await page.title(), text: (await page.locator('body').innerText({ timeout: 15000 }).catch(() => '')).slice(0, 12000) });
   const status = async () => {
@@ -32,11 +21,11 @@ export async function runFacebookAuthLLM(page, providerChat) {
     return code;
   };
   const messages = [
-    { role: 'system', content: 'You are the Facebook authentication sub-agent for a travel sales company. Operate the CURRENT persistent browser page using the tools. First inspect it. If already authenticated, stop. If login is needed, navigate to Facebook login, inspect the live page, identify the visible email/password fields from the snapshot, securely fill them with facebook_auth_input, submit using a visible control or Enter, inspect the result, and only if Facebook visibly requests a verification code use facebook_otp_get then facebook_otp_input. Never request, expose, repeat, or infer credentials or OTP values. If Facebook presents CAPTCHA, checkpoint, identity confirmation, or another human-only challenge, stop and report blocked. Finish with facebook_auth_status.' },
+    { role: 'system', content: 'You are ONLY the Facebook authentication sub-agent. Operate the CURRENT persistent browser page. Use only browser_navigate, browser_snapshot, browser_click, browser_press, facebook_auth_input, facebook_otp_get, facebook_otp_input, and facebook_auth_status. Do NOT call facebook_authenticate recursively and do not use company/work tools. First inspect the page. If already authenticated, verify and stop. If login is needed, navigate to Facebook login, inspect the live page, identify the visible email/password fields from the snapshot, securely fill them with facebook_auth_input, submit using a visible control or Enter, inspect the result, and only if Facebook visibly requests a verification code use facebook_otp_get then facebook_otp_input. Never request, expose, repeat, or infer credentials or OTP values. If Facebook presents CAPTCHA, checkpoint, identity confirmation, or another human-only challenge, stop and report blocked. Finish with facebook_auth_status.' },
     { role: 'user', content: 'Authenticate Facebook now using the current persistent browser. Begin with browser_snapshot.' }
   ];
   for (let round = 0; round < 12; round++) {
-    const result = await providerChat([...messages, { role: 'system', content: JSON.stringify({ tools }) }]);
+    const result = await providerChat(messages);
     const msg = result.choices?.[0]?.message;
     if (!msg) throw new Error('LLM returned no message');
     messages.push(msg);
@@ -62,7 +51,8 @@ export async function runFacebookAuthLLM(page, providerChat) {
           case 'facebook_otp_get': await otp(); output = { ok: true, otp_available: true }; break;
           case 'facebook_otp_input': { const code = await otp(); await page.locator(args.selector).filter({ visible: true }).first().fill(code, { timeout: 20000 }); output = { ok: true, otp_entered: true }; break; }
           case 'facebook_auth_status': output = await status(); break;
-          default: throw new Error(`Unknown Facebook auth tool ${call.function.name}`);
+          case 'facebook_authenticate': throw new Error('Recursive Facebook authentication call blocked');
+          default: throw new Error(`Tool not allowed in Facebook auth sub-agent: ${call.function.name}`);
         }
       } catch (e) { output = { ok: false, error: e instanceof Error ? e.message : String(e) }; }
       messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(output) });
