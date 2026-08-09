@@ -39,22 +39,19 @@ export async function runFacebookAuthLLM(page, providerChat) {
     return code;
   };
 
-  // Establish the correct Facebook page before the LLM takes control. The LLM still
-  // makes every authentication decision and every credential/OTP action.
   const before = await status();
   if (!before.authenticated && !before.checkpoint) {
     await page.goto('https://www.facebook.com/login/', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
   }
 
   const messages = [
-    { role: 'system', content: 'You are ONLY the Facebook authentication sub-agent. Operate the CURRENT persistent browser page. First inspect the live page. If already authenticated, verify and stop. If login is needed, use the live page to identify visible email/password controls from the snapshot, securely fill them with facebook_auth_input, submit using an observed visible control or Enter, inspect the result, and only if Facebook visibly requests a verification code use facebook_otp_get then facebook_otp_input. Never request, expose, repeat, or infer credentials or OTP values. If Facebook presents CAPTCHA, checkpoint, identity confirmation, or another human-only challenge, stop and report blocked. Finish with facebook_auth_status.' },
-    { role: 'user', content: 'Authenticate Facebook now. Begin with browser_snapshot and use the current persistent session.' }
+    { role: 'system', content: 'You are ONLY the Facebook authentication sub-agent. Operate the CURRENT persistent browser page. First inspect the live page with browser_snapshot. If already authenticated, verify and stop. If login is needed, identify visible email/password controls from the snapshot, securely fill them with facebook_auth_input, submit using an observed visible control or Enter, then inspect the result. IMPORTANT: if Facebook presents a verification/checkpoint screen with multiple verification methods, inspect the visible choices and SELECT SMS/TEXT MESSAGE verification when it is available. Do NOT select an authenticator-app method when SMS/text is available. After selecting SMS/text, wait for the code request to complete, use facebook_otp_get to confirm the configured VM relay has a numeric code, then use facebook_otp_input on the observed OTP field and continue. Never request, expose, repeat, or infer credentials or OTP values. Do not stop merely because the page contains the word checkpoint: a verification checkpoint is actionable when an SMS/text option is visible. Stop only for a CAPTCHA or genuinely human-only identity challenge with no usable SMS verification path. Finish with facebook_auth_status.' },
+    { role: 'user', content: 'Authenticate Facebook now. Begin with browser_snapshot and use the current persistent session. If a verification method screen appears, choose SMS/text verification when available.' }
   ];
 
-  for (let round = 0; round < 16; round++) {
+  for (let round = 0; round < 20; round++) {
     const current = await status();
     if (current.authenticated) return current;
-    if (current.checkpoint) return current;
 
     const result = await providerChat(messages, AUTH_TOOLS);
     const msg = result.choices?.[0]?.message;
@@ -62,7 +59,8 @@ export async function runFacebookAuthLLM(page, providerChat) {
     messages.push(msg);
     if (!msg.tool_calls?.length) {
       const s = await status();
-      if (s.authenticated || s.checkpoint) return s;
+      if (s.authenticated) return s;
+      if (s.checkpoint) return s;
       throw new Error(`LLM stopped before Facebook authentication completed: ${msg.content || 'no tool call'}`);
     }
     for (const call of msg.tool_calls) {
