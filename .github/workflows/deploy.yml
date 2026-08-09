@@ -24,15 +24,14 @@ jobs:
             echo '=== NODE ==='
             /usr/bin/node --version
 
-            echo '=== VERIFY AI TOKEN ==='
-            test -f /home/azureuser/browser-use-bridge/.env
-            grep '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env >/dev/null || { echo 'ERROR: HF_TOKEN missing'; exit 1; }
-            grep '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env | sudo tee /etc/leadpilotai-agent.env >/dev/null
+            echo '=== VERIFY TOKENS ==='
+            test -f .env
+            grep '^HF_TOKEN=' .env >/dev/null || { echo 'ERROR: HF_TOKEN missing'; exit 1; }
+            grep '^VM_EXEC_TOKEN=' .env >/dev/null || { echo 'ERROR: VM_EXEC_TOKEN missing'; exit 1; }
+            grep '^HF_TOKEN=' .env | sudo tee /etc/leadpilotai-agent.env >/dev/null
+            grep '^VM_EXEC_TOKEN=' .env | sudo tee -a /etc/leadpilotai-agent.env >/dev/null
             sudo chmod 640 /etc/leadpilotai-agent.env
             sudo chown root:azureuser /etc/leadpilotai-agent.env
-
-            echo '=== VERIFY VM EXEC TOKEN ==='
-            grep '^VM_EXEC_TOKEN=' /home/azureuser/browser-use-bridge/.env >/dev/null || { echo 'ERROR: VM_EXEC_TOKEN missing'; exit 1; }
 
             echo '=== INSTALL/RESTART AGENT ==='
             sudo cp travel-sales-agent/travel-sales-agent.service /etc/systemd/system/travel-sales-agent.service
@@ -51,4 +50,4 @@ jobs:
             printf '%s\n' "$RESPONSE"
             python3 -c 'import json,sys; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); assert "Example Domain" in c, d; print("AI_VM_CHROMIUM_OK")' "$RESPONSE"
 
-            echo '=== AGENT WORKING ==='
+            echo '=== DEPLOYMENT VERIFIED ==='
