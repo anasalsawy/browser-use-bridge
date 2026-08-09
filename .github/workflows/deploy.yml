@@ -46,9 +46,9 @@ jobs:
             curl -fsS http://127.0.0.1:8890/health
             echo
 
-            echo '=== AI + VM TOOL TEST ==='
-            RESPONSE="$(curl -fsS --max-time 90 -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"Use the vm_exec tool to run: printf BROWSER_BRIDGE_WORKING. Then reply with exactly the tool output."}')"
+            echo '=== AI + VM + CHROMIUM TEST ==='
+            RESPONSE="$(curl -fsS --max-time 120 -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"Use vm_exec now. Run this exact non-destructive browser test: if command -v chromium >/dev/null 2>&1; then chromium --headless --no-sandbox --disable-gpu --dump-dom https://example.com 2>/dev/null | grep -o \"<title>[^<]*</title>\" | head -1; elif command -v chromium-browser >/dev/null 2>&1; then chromium-browser --headless --no-sandbox --disable-gpu --dump-dom https://example.com 2>/dev/null | grep -o \"<title>[^<]*</title>\" | head -1; else echo CHROMIUM_NOT_FOUND; fi. Then reply with exactly the tool output."}')"
             printf '%s\n' "$RESPONSE"
-            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); assert "BROWSER_BRIDGE_WORKING" in c, d; print("AI_VM_TOOL_OK")' "$RESPONSE"
+            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); assert "Example Domain" in c, d; print("AI_VM_CHROMIUM_OK")' "$RESPONSE"
 
             echo '=== AGENT WORKING ==='
