@@ -15,8 +15,10 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
+          command_timeout: 10m
           script: |
-            set -euo pipefail
+            set -Eeuo pipefail
+            trap 'echo "=== DEPLOYMENT FAILED ==="; sudo systemctl status travel-sales-agent --no-pager -l || true; sudo journalctl -u travel-sales-agent -n 120 --no-pager || true; echo "=== PROCESS STATE ==="; pgrep -af "travel-sales-agent|node" || true' ERR
             cd /home/azureuser/browser-use-bridge
             echo '=== SYNC REPOSITORY ==='
             git remote set-url origin https://github.com/anasalsawy/browser-use-bridge.git
@@ -24,8 +26,11 @@ jobs:
             git fetch --prune origin main
             git reset --hard origin/main
 
-            echo '=== NODE ==='
+            echo '=== NODE TOOLCHAIN ==='
             /usr/bin/node --version
+            /usr/bin/npm --version
+            echo "PATH=$PATH"
+            type -a npm || true
 
             echo '=== VERIFY TOKENS ==='
             test -r .env || { echo 'ERROR: .env missing/unreadable'; exit 1; }
@@ -41,7 +46,8 @@ jobs:
 
             echo '=== INSTALL TRAVEL AGENT ==='
             cd /home/azureuser/browser-use-bridge/travel-sales-agent
-            npm install --omit=dev
+            /usr/bin/npm install --omit=dev --no-audit --no-fund
+            test -x node_modules/.bin/playwright
             cd /home/azureuser/browser-use-bridge
 
             echo '=== INSTALL/RESTART AGENT ==='
@@ -56,19 +62,14 @@ jobs:
             sudo fuser -k 8890/tcp || true
             sleep 1
             sudo systemctl start travel-sales-agent
-            sleep 4
+            sleep 5
 
             echo '=== SERVICE STATUS ==='
-            if ! sudo systemctl is-active --quiet travel-sales-agent; then
-              echo 'ERROR: travel-sales-agent did not become active'
-              sudo systemctl status travel-sales-agent --no-pager -l || true
-              sudo journalctl -u travel-sales-agent -n 100 --no-pager || true
-              exit 1
-            fi
-            sudo systemctl status travel-sales-agent --no-pager -l | tail -n 25
+            sudo systemctl is-active --quiet travel-sales-agent
+            sudo systemctl status travel-sales-agent --no-pager -l | tail -n 30
 
             echo '=== HEALTH ==='
-            curl -fsS http://127.0.0.1:8890/health
+            curl -fsS --max-time 20 http://127.0.0.1:8890/health
             echo
 
             echo '=== AI + NATIVE CHROMIUM TEST ==='
