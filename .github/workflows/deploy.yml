@@ -19,7 +19,10 @@ jobs:
           script: |
             set -euo pipefail
             cd /home/azureuser/browser-use-bridge
-            git fetch origin main
+            echo '=== SYNC REPOSITORY ==='
+            git remote set-url origin https://github.com/anasalsawy/browser-use-bridge.git
+            git remote prune origin || true
+            git fetch --prune origin main
             git reset --hard origin/main
             echo '=== NODE ==='
             /usr/bin/node --version
