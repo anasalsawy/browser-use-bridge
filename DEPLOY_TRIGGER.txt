@@ -1,0 +1,1 @@
+Force deployment after switching the travel sales agent to Hugging Face Inference Providers.
