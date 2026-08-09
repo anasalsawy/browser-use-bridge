@@ -3,7 +3,11 @@ import http from 'node:http';
 const PORT = Number(process.env.TRAVEL_AGENT_PORT || 8890);
 const API_KEY = process.env.HF_TOKEN || process.env.AI_API_KEY;
 const BASE_URL = (process.env.AI_BASE_URL || 'https://router.huggingface.co/v1').replace(/\/$/, '');
-const MODEL = process.env.AI_MODEL || 'openai/gpt-oss-120b:fastest';
+const MODELS = [
+  process.env.AI_MODEL || 'openai/gpt-oss-120b:fastest',
+  'openai/gpt-oss-20b:fastest',
+  'deepseek-ai/DeepSeek-R1:fastest'
+];
 const PROVIDER = process.env.AI_PROVIDER || 'huggingface';
 const SYSTEM_PROMPT = `You are an elite travel sales specialist for Your Travel Agent. Qualify flight leads, gather origin, destination, dates, passenger count, cabin, and trip type. Be warm, professional, transparent, and never invent flight availability, prices, bookings, payment receipt, or credentials. The business targets very competitive fares; only claim a specific discount when supported by an actual quote. For a new lead, ask only the missing qualification questions and keep the conversation concise.`;
 
@@ -13,16 +17,27 @@ if (!API_KEY) {
 }
 
 async function aiChat(messages, tools) {
-  const body = { model: MODEL, messages, max_tokens: 1200, temperature: 0.3 };
-  if (tools?.length) body.tools = tools;
-  const r = await fetch(`${BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${API_KEY}` },
-    body: JSON.stringify(body)
-  });
-  const text = await r.text();
-  if (!r.ok) throw new Error(`AI provider ${r.status}: ${text.slice(0, 1000)}`);
-  return JSON.parse(text);
+  const errors = [];
+  for (const model of MODELS) {
+    try {
+      const body = { model, messages, max_tokens: 1200, temperature: 0.3 };
+      if (tools?.length) body.tools = tools;
+      const r = await fetch(`${BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${API_KEY}` },
+        body: JSON.stringify(body)
+      });
+      const text = await r.text();
+      if (!r.ok) {
+        errors.push(`${model}: HTTP ${r.status} ${text.slice(0, 500)}`);
+        continue;
+      }
+      return { ...JSON.parse(text), _agent_model: model };
+    } catch (e) {
+      errors.push(`${model}: ${e.message}`);
+    }
+  }
+  throw new Error(`All Hugging Face models failed: ${errors.join(' | ')}`);
 }
 
 const tools = [{
@@ -56,7 +71,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, service: 'travel-sales-agent', model: MODEL, provider: PROVIDER }));
+      res.end(JSON.stringify({ ok: true, service: 'travel-sales-agent', models: MODELS, provider: PROVIDER }));
       return;
     }
     if (req.method === 'POST' && req.url === '/chat') {
