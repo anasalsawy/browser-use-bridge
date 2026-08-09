@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: browser-use-bridge-vm-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -18,8 +22,11 @@ jobs:
           command_timeout: 15m
           script: |
             set -Eeuo pipefail
+            exec 9>/var/lock/travel-sales-agent-deploy.lock
+            flock 9
             trap 'echo "=== DEPLOYMENT FAILED ==="; sudo systemctl status travel-sales-agent --no-pager -l || true; sudo journalctl -u travel-sales-agent -n 160 --no-pager || true; echo "=== PROCESS STATE ==="; pgrep -af "travel-sales-agent|node" || true' ERR
             cd /home/azureuser/browser-use-bridge
+            echo '=== DEPLOYMENT LOCK ACQUIRED ==='
             echo '=== SYNC REPOSITORY ==='
             git remote set-url origin https://github.com/anasalsawy/browser-use-bridge.git
             git remote prune origin || true
@@ -106,4 +113,9 @@ jobs:
             fi
             python3 -c 'import json,sys,re; raw=sys.argv[1].split("\nHTTP_STATUS:",1)[0]; d=json.loads(raw); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); m=re.search(r"AUTH_RESULT\s+authenticated=(true|false)\s+checkpoint=(true|false)", c, re.I); assert m, {"response":c}; authenticated=m.group(1).lower()=="true"; checkpoint=m.group(2).lower()=="true"; assert authenticated and not checkpoint, {"authenticated":authenticated,"checkpoint":checkpoint,"response":c}; print("FACEBOOK_LLM_AUTH_OK")' "$FB_RESPONSE"
 
+            echo '=== FINAL SERVICE CHECK ==='
+            sudo systemctl is-active --quiet travel-sales-agent
+            sudo systemctl is-enabled --quiet travel-sales-agent
+            FINAL_HEALTH="$(curl -sS --max-time 20 http://127.0.0.1:8890/health)"
+            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d.get("ok") is True and d.get("browser") == "ready", d; print("FINAL_SERVICE_HEALTH_OK")' "$FINAL_HEALTH"
             echo '=== COMPANY AGENT READY: FACEBOOK AUTH VERIFIED ==='
