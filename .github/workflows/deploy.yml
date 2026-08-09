@@ -15,10 +15,10 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
-          command_timeout: 10m
+          command_timeout: 15m
           script: |
             set -Eeuo pipefail
-            trap 'echo "=== DEPLOYMENT FAILED ==="; sudo systemctl status travel-sales-agent --no-pager -l || true; sudo journalctl -u travel-sales-agent -n 120 --no-pager || true; echo "=== PROCESS STATE ==="; pgrep -af "travel-sales-agent|node" || true' ERR
+            trap 'echo "=== DEPLOYMENT FAILED ==="; sudo systemctl status travel-sales-agent --no-pager -l || true; sudo journalctl -u travel-sales-agent -n 160 --no-pager || true; echo "=== PROCESS STATE ==="; pgrep -af "travel-sales-agent|node" || true' ERR
             cd /home/azureuser/browser-use-bridge
             echo '=== SYNC REPOSITORY ==='
             git remote set-url origin https://github.com/anasalsawy/browser-use-bridge.git
@@ -35,7 +35,11 @@ jobs:
             echo '=== VERIFY TOKENS ==='
             test -r .env || { echo 'ERROR: .env missing/unreadable'; exit 1; }
             grep -qE '^HF_TOKEN=[^[:space:]].*$' .env || { echo 'HF_TOKEN: missing/empty'; exit 1; }
+            grep -qE '^FB_EMAIL=[^[:space:]].*$' .env || { echo 'FB_EMAIL: missing/empty'; exit 1; }
+            grep -qE '^FB_PASSWORD=[^[:space:]].*$' .env || { echo 'FB_PASSWORD: missing/empty'; exit 1; }
+            if grep -qE '^FB_OTP_GET_URL=[^[:space:]].*$' .env && grep -qE '^FB_OTP_GET_TOKEN=[^[:space:]].*$' .env; then echo 'FB OTP GET relay: configured'; else echo 'FB OTP GET relay: missing'; fi
             echo 'HF_TOKEN: present'
+            echo 'Facebook credentials: present'
 
             echo '=== BROWSER RUNTIME ==='
             if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
@@ -48,11 +52,13 @@ jobs:
             cd /home/azureuser/browser-use-bridge/travel-sales-agent
             /usr/bin/npm install --omit=dev --no-audit --no-fund
             test -x node_modules/.bin/playwright
+            /usr/bin/node --check server.mjs
+            /usr/bin/node --check facebook-llm-auth.mjs
             cd /home/azureuser/browser-use-bridge
 
             echo '=== INSTALL/RESTART AGENT ==='
             sudo mkdir -p /etc/leadpilotai
-            sudo sh -c 'grep "^HF_TOKEN=" /home/azureuser/browser-use-bridge/.env > /etc/leadpilotai/agent.env'
+            sudo sh -c 'grep -E "^(HF_TOKEN|FB_EMAIL|FB_PASSWORD|FB_OTP_GET_URL|FB_OTP_GET_TOKEN|FB_OTP_URL|FB_OTP_TOKEN|BROWSER_PROFILE_DIR|AI_BASE_URL|AI_MODEL)=" /home/azureuser/browser-use-bridge/.env > /etc/leadpilotai/agent.env'
             sudo chown root:azureuser /etc/leadpilotai/agent.env
             sudo chmod 640 /etc/leadpilotai/agent.env
             sudo cp -f travel-sales-agent/travel-sales-agent.service /etc/systemd/system/travel-sales-agent.service
@@ -66,7 +72,7 @@ jobs:
 
             echo '=== SERVICE STATUS ==='
             sudo systemctl is-active --quiet travel-sales-agent
-            sudo systemctl status travel-sales-agent --no-pager -l | tail -n 30
+            sudo systemctl status travel-sales-agent --no-pager -l | tail -n 35
 
             echo '=== HEALTH ==='
             curl -fsS --max-time 20 http://127.0.0.1:8890/health
@@ -77,4 +83,9 @@ jobs:
             printf '%s\n' "$RESPONSE"
             python3 -c 'import json,sys; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); assert "Example Domain" in c and "example.com" in c, d; print("AI_NATIVE_CHROMIUM_OK")' "$RESPONSE"
 
-            echo '=== COMPANY AGENT READY ==='
+            echo '=== FACEBOOK LLM AUTH TEST ==='
+            FB_RESPONSE="$(curl -fsS --max-time 300 -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"Use facebook_authenticate now. The Facebook authentication must be performed by the LLM on the current persistent browser session. Use the existing VM Facebook credentials and existing OTP GET relay when required. Never expose credentials or OTP. After the authentication sub-agent finishes, use facebook_auth_status and report only whether authenticated is true or false and whether a checkpoint blocked it."}')"
+            printf '%s\n' "$FB_RESPONSE"
+            python3 -c 'import json,sys,re; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); assert re.search(r"authenticated[^\\n]*(true|yes)", c, re.I) or re.search(r"authenticated\\s*[:=]\\s*true", c, re.I), d; print("FACEBOOK_LLM_AUTH_OK")' "$FB_RESPONSE"
+
+            echo '=== COMPANY AGENT READY: FACEBOOK AUTH VERIFIED ==='
