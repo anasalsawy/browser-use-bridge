@@ -21,39 +21,32 @@ jobs:
             cd /home/azureuser/browser-use-bridge
             git fetch origin main
             git reset --hard origin/main
-
-            echo '=== NODE ==='
             node --version
-            echo '=== INSTALL ==='
             npm install --omit=dev
 
-            echo '=== LOCATE HUGGING FACE TOKEN ==='
-            if [ ! -f /home/azureuser/browser-use-bridge/.env ] || ! grep -q '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env; then
-              echo 'ERROR: HF_TOKEN is missing from /home/azureuser/browser-use-bridge/.env'
-              exit 1
-            fi
+            echo '=== VERIFY HF TOKEN ==='
+            test -f /home/azureuser/browser-use-bridge/.env
+            grep -q '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env
             sudo mkdir -p /etc/leadpilotai
             sudo grep '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env | sudo tee /etc/leadpilotai/agent.env >/dev/null
             sudo chmod 640 /etc/leadpilotai/agent.env
             sudo chown root:azureuser /etc/leadpilotai/agent.env
-            echo 'HF_TOKEN source found: /home/azureuser/browser-use-bridge/.env (value not printed)'
 
-            echo '=== INSTALL TRAVEL AGENT SERVICE ==='
+            echo '=== INSTALL/RESTART AGENT ==='
             sudo cp travel-sales-agent/travel-sales-agent.service /etc/systemd/system/travel-sales-agent.service
             sudo systemctl daemon-reload
             sudo systemctl enable travel-sales-agent
             sudo systemctl restart travel-sales-agent
-            sleep 4
+            sleep 3
+            sudo systemctl is-active --quiet travel-sales-agent
 
-            echo '=== TRAVEL AGENT STATUS ==='
-            sudo systemctl status travel-sales-agent --no-pager -l
-            echo '=== TRAVEL AGENT HEALTH ==='
+            echo '=== HEALTH ==='
             curl -fsS http://127.0.0.1:8890/health
             echo
-            echo '=== HUGGING FACE SMOKE TEST ==='
-            curl -fsS -X POST http://127.0.0.1:8890/chat \
-              -H 'Content-Type: application/json' \
-              --data '{"message":"Hi, I need a flight from Cairo to Houston on August 20 for one adult. Ask me for any missing booking details."}' \
-              | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("choices",[{}])[0].get("message",{}).get("content") or d)'
-            echo
-            echo '=== DEPLOY COMPLETE ==='
+
+            echo '=== REAL AI TEST ==='
+            RESPONSE="$(curl -fsS --max-time 90 -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"I need one economy ticket from Cairo to Houston on August 20. Reply with a short professional qualification question."}')"
+            printf '%s\n' "$RESPONSE"
+            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content"); assert c and len(c.strip())>0, d; print("AI_RESPONSE_OK")' "$RESPONSE"
+
+            echo '=== AGENT WORKING ==='
