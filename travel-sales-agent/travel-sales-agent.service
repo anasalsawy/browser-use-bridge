@@ -12,12 +12,12 @@ EnvironmentFile=-/etc/leadpilotai/agent.env
 EnvironmentFile=-/home/azureuser/browser-use-bridge/.env
 Environment="TRAVEL_AGENT_PORT=8890"
 Environment="AI_BASE_URL=https://router.huggingface.co/v1"
-Environment="AI_MODEL=openai/gpt-oss-120b:fastest"
+Environment="AI_MODEL=openai/gpt-oss-120b:groq"
 Environment="AI_PROVIDER=huggingface"
 ExecStart=/usr/bin/node /home/azureuser/browser-use-bridge/travel-sales-agent/server.mjs
 Restart=always
 RestartSec=5
-TimeoutStopSec=15
+TimeoutStopSec=60
 KillMode=control-group
 SendSIGKILL=yes
 NoNewPrivileges=true
