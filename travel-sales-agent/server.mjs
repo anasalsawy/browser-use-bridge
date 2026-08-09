@@ -14,16 +14,43 @@ if (!API_KEY) { console.error('HF_TOKEN is required'); process.exit(1); }
 
 let browserContext = null;
 let browserPage = null;
+let browserInitPromise = null;
+let shuttingDown = false;
 
 async function ensureBrowser() {
-  if (browserContext && browserPage) return browserPage;
-  browserContext = await chromium.launchPersistentContext(PROFILE_DIR, {
-    headless: true,
-    viewport: { width: 1440, height: 1000 },
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+  if (shuttingDown) throw new Error('Travel sales agent is shutting down');
+  if (browserContext && browserPage) {
+    try {
+      if (browserContext.browser()?.isConnected() && !browserPage.isClosed()) return browserPage;
+    } catch {}
+    browserContext = null;
+    browserPage = null;
+  }
+  if (browserInitPromise) return browserInitPromise;
+  browserInitPromise = (async () => {
+    const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+      headless: true,
+      viewport: { width: 1440, height: 1000 },
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+    });
+    if (shuttingDown) {
+      await context.close().catch(() => {});
+      throw new Error('Travel sales agent is shutting down');
+    }
+    const page = context.pages()[0] || await context.newPage();
+    browserContext = context;
+    browserPage = page;
+    context.on('close', () => {
+      if (browserContext === context) {
+        browserContext = null;
+        browserPage = null;
+      }
+    });
+    return page;
+  })().finally(() => {
+    browserInitPromise = null;
   });
-  browserPage = browserContext.pages()[0] || await browserContext.newPage();
-  return browserPage;
+  return browserInitPromise;
 }
 
 async function browserNavigate(url) {
@@ -68,9 +95,10 @@ async function browserWait(ms) {
 }
 
 async function browserClose() {
-  if (browserContext) await browserContext.close();
+  const context = browserContext;
   browserContext = null;
   browserPage = null;
+  if (context) await context.close().catch(() => {});
   return JSON.stringify({ ok: true });
 }
 
@@ -223,4 +251,30 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404); res.end('Not found');
   } catch (e) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: e.message })); }
 });
+
+let shutdownPromise = null;
+async function shutdown(signal) {
+  if (shutdownPromise) return shutdownPromise;
+  shuttingDown = true;
+  shutdownPromise = (async () => {
+    console.log(`Received ${signal}; shutting down travel sales agent...`);
+    await new Promise(resolve => {
+      if (!server.listening) return resolve();
+      server.close(() => resolve());
+      setTimeout(resolve, 5000).unref();
+    });
+    const context = browserContext;
+    browserContext = null;
+    browserPage = null;
+    browserInitPromise = null;
+    if (context) await context.close().catch(err => console.error('Browser close error:', err.message));
+    console.log('Travel sales agent shutdown complete.');
+  })();
+  await shutdownPromise;
+  process.exit(0);
+}
+
+process.once('SIGTERM', () => { shutdown('SIGTERM').catch(err => { console.error(err); process.exit(1); }); });
+process.once('SIGINT', () => { shutdown('SIGINT').catch(err => { console.error(err); process.exit(1); }); });
+
 server.listen(PORT, '127.0.0.1', () => console.log(`Travel sales agent listening on http://127.0.0.1:${PORT}`));
