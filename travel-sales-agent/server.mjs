@@ -243,8 +243,17 @@ async function executeTool(name, args) {
 async function handleChat(payload) {
   const messages = [{ role: 'system', content: SYSTEM_PROMPT }, ...(Array.isArray(payload.messages) ? payload.messages : []), ...(payload.message ? [{ role: 'user', content: String(payload.message) }] : [])];
   if (!messages.some(m => m.role === 'user')) throw new Error('message or messages is required');
+  const forceFacebookAuth = messages.some(m =>
+    typeof m.content === 'string' && /\bfacebook_authenticate\b/i.test(m.content)
+  );
   for (let round = 0; round < 12; round++) {
-    const result = await providerChat(messages);
+    const result = await providerChat(
+      messages,
+      tools,
+      round === 0 && forceFacebookAuth
+        ? { tool_choice: { type: 'function', function: { name: 'facebook_authenticate' } }, parallel_tool_calls: false }
+        : {}
+    );
     const msg = result.choices[0].message;
     messages.push(msg);
     if (!msg.tool_calls?.length) return result;
