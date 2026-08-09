@@ -53,20 +53,24 @@ async function login() {
 
     const email = page.locator('input[name="email"], input[type="email"]').first();
     const password = page.locator('input[name="pass"], input[type="password"]').first();
+    await email.waitFor({ state: 'visible', timeout: 30000 });
+    await password.waitFor({ state: 'visible', timeout: 30000 });
     await email.fill(EMAIL);
     await password.fill(PASSWORD);
-    await page.locator('button[name="login"], button[type="submit"], input[type="submit"]').first().click();
 
-    for (let i = 0; i < 30; i++) {
+    // Facebook can expose hidden duplicate submit controls. Submit from the visible password field.
+    await password.press('Enter');
+
+    for (let i = 0; i < 45; i++) {
       await sleep(1000);
       if (await authenticated(page)) return { ok: true, authenticated: true, reusedSession: false };
 
-      const otpInput = page.locator('input[autocomplete="one-time-code"], input[name*="code" i], input[name*="otp" i], input[inputmode="numeric"]').first();
+      const otpInput = page.locator('input[autocomplete="one-time-code"], input[name*="code" i], input[name*="otp" i], input[inputmode="numeric"]:visible').first();
       if (await otpInput.count()) {
         const otp = await fetchOtp();
         await otpInput.fill(otp);
-        const submit = page.locator('button[type="submit"], button').filter({ hasText: /continue|confirm|submit|log in/i }).first();
-        if (await submit.count()) await submit.click();
+        await otpInput.press('Enter');
+        await sleep(1500);
       }
     }
 
