@@ -31,6 +31,8 @@ jobs:
             /usr/bin/npm --version
             echo "PATH=$PATH"
             type -a npm || true
+            type -a curl || true
+            curl --version | head -n 1
 
             echo '=== VERIFY TOKENS ==='
             test -r .env || { echo 'ERROR: .env missing/unreadable'; exit 1; }
@@ -75,17 +77,33 @@ jobs:
             sudo systemctl status travel-sales-agent --no-pager -l | tail -n 35
 
             echo '=== HEALTH ==='
-            curl -fsS --max-time 20 http://127.0.0.1:8890/health
-            echo
+            HEALTH_RESPONSE="$(curl -sS --max-time 20 -w '\nHTTP_STATUS:%{http_code}\n' http://127.0.0.1:8890/health)"
+            printf '%s\n' "$HEALTH_RESPONSE"
+            HEALTH_STATUS="$(printf '%s\n' "$HEALTH_RESPONSE" | sed -n 's/^HTTP_STATUS://p' | tail -n 1)"
+            if [ "$HEALTH_STATUS" != "200" ]; then
+              echo "HEALTH_CHECK_FAILED_HTTP_$HEALTH_STATUS"
+              exit 1
+            fi
+            python3 -c 'import json,sys; raw=sys.argv[1].split("\nHTTP_STATUS:",1)[0]; d=json.loads(raw); assert d.get("ok") is True, d; assert d.get("browser") == "ready", d; print("HEALTH_OK")' "$HEALTH_RESPONSE"
 
             echo '=== AI + NATIVE CHROMIUM TEST ==='
-            RESPONSE="$(curl -fsS --max-time 180 -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"Use browser_navigate to open https://example.com, then use browser_snapshot. Report exactly the page title and URL returned by the tools."}')"
-            printf '%s\n' "$RESPONSE"
-            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); assert "Example Domain" in c and "example.com" in c, d; print("AI_NATIVE_CHROMIUM_OK")' "$RESPONSE"
+            AI_RESPONSE="$(curl -sS --max-time 180 -w '\nHTTP_STATUS:%{http_code}\n' -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"Use browser_navigate to open https://example.com, then use browser_snapshot. Report exactly the page title and URL returned by the tools."}')"
+            printf '%s\n' "$AI_RESPONSE"
+            AI_STATUS="$(printf '%s\n' "$AI_RESPONSE" | sed -n 's/^HTTP_STATUS://p' | tail -n 1)"
+            if [ "$AI_STATUS" != "200" ]; then
+              echo "AI_CHAT_FAILED_HTTP_$AI_STATUS"
+              exit 1
+            fi
+            python3 -c 'import json,sys; raw=sys.argv[1].split("\nHTTP_STATUS:",1)[0]; d=json.loads(raw); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); assert "Example Domain" in c and "example.com" in c, d; print("AI_NATIVE_CHROMIUM_OK")' "$AI_RESPONSE"
 
             echo '=== FACEBOOK LLM AUTH TEST ==='
-            FB_RESPONSE="$(curl -fsS --max-time 300 -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"Use facebook_authenticate now. The Facebook authentication must be performed by the LLM on the current persistent browser session. Use the existing VM Facebook credentials and existing OTP GET relay when required. Never expose credentials or OTP. After the authentication sub-agent finishes, use facebook_auth_status and report only whether authenticated is true or false and whether a checkpoint blocked it."}')"
+            FB_RESPONSE="$(curl -sS --max-time 300 -w '\nHTTP_STATUS:%{http_code}\n' -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"Use facebook_authenticate now. The Facebook authentication must be performed by the LLM on the current persistent browser session. Use the existing VM Facebook credentials and existing OTP GET relay when required. Never expose credentials or OTP. After the authentication sub-agent finishes, use facebook_auth_status and report exactly one line in this format: AUTH_RESULT authenticated=<true|false> checkpoint=<true|false>. Do not add any other text after that line."}')"
             printf '%s\n' "$FB_RESPONSE"
-            python3 -c 'import json,sys,re; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); assert re.search(r"authenticated[^\\n]*(true|yes)", c, re.I) or re.search(r"authenticated\\s*[:=]\\s*true", c, re.I), d; print("FACEBOOK_LLM_AUTH_OK")' "$FB_RESPONSE"
+            FB_STATUS="$(printf '%s\n' "$FB_RESPONSE" | sed -n 's/^HTTP_STATUS://p' | tail -n 1)"
+            if [ "$FB_STATUS" != "200" ]; then
+              echo "FACEBOOK_AUTH_CHAT_FAILED_HTTP_$FB_STATUS"
+              exit 1
+            fi
+            python3 -c 'import json,sys,re; raw=sys.argv[1].split("\nHTTP_STATUS:",1)[0]; d=json.loads(raw); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); m=re.search(r"AUTH_RESULT\s+authenticated=(true|false)\s+checkpoint=(true|false)", c, re.I); assert m, {"response":c}; authenticated=m.group(1).lower()=="true"; checkpoint=m.group(2).lower()=="true"; assert authenticated and not checkpoint, {"authenticated":authenticated,"checkpoint":checkpoint,"response":c}; print("FACEBOOK_LLM_AUTH_OK")' "$FB_RESPONSE"
 
             echo '=== COMPANY AGENT READY: FACEBOOK AUTH VERIFIED ==='
