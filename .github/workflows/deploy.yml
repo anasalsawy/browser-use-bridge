@@ -31,46 +31,50 @@ jobs:
             echo '=== VERIFY TOKENS ==='
             test -r .env || { echo 'ERROR: .env missing/unreadable'; exit 1; }
             grep -qE '^HF_TOKEN=[^[:space:]].*$' .env || { echo 'HF_TOKEN: missing/empty'; exit 1; }
-            grep -qE '^VM_EXEC_TOKEN=[^[:space:]].*$' .env || { echo 'VM_EXEC_TOKEN: missing/empty'; exit 1; }
             echo 'HF_TOKEN: present'
-            echo 'VM_EXEC_TOKEN: present'
 
-            echo '=== INSTALL ENVIRONMENT ==='
-            sudo mkdir -p /etc/leadpilotai
-            sudo sh -c 'grep "^HF_TOKEN=" /home/azureuser/browser-use-bridge/.env > /etc/leadpilotai/agent.env'
-            sudo sh -c 'grep "^VM_EXEC_TOKEN=" /home/azureuser/browser-use-bridge/.env >> /etc/leadpilotai/agent.env'
-            sudo chown root:azureuser /etc/leadpilotai/agent.env
-            sudo chmod 640 /etc/leadpilotai/agent.env
-            sudo test -r /etc/leadpilotai/agent.env
-            echo 'Agent environment installed'
+            echo '=== BROWSER RUNTIME ==='
+            if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
+              sudo apt-get update -y
+              sudo apt-get install -y chromium
+            fi
+            if command -v chromium >/dev/null 2>&1; then chromium --version; else chromium-browser --version; fi
+
+            echo '=== INSTALL TRAVEL AGENT ==='
+            cd /home/azureuser/browser-use-bridge/travel-sales-agent
+            npm install --omit=dev
+            cd /home/azureuser/browser-use-bridge
 
             echo '=== INSTALL/RESTART AGENT ==='
+            sudo mkdir -p /etc/leadpilotai
+            sudo sh -c 'grep "^HF_TOKEN=" /home/azureuser/browser-use-bridge/.env > /etc/leadpilotai/agent.env'
+            sudo chown root:azureuser /etc/leadpilotai/agent.env
+            sudo chmod 640 /etc/leadpilotai/agent.env
             sudo cp -f travel-sales-agent/travel-sales-agent.service /etc/systemd/system/travel-sales-agent.service
             sudo systemctl daemon-reload
             sudo systemctl enable travel-sales-agent >/dev/null
             sudo systemctl stop travel-sales-agent || true
-            # Ensure a stale process cannot hold the agent port.
             sudo fuser -k 8890/tcp || true
             sleep 1
             sudo systemctl start travel-sales-agent
-            sleep 3
+            sleep 4
 
             echo '=== SERVICE STATUS ==='
             if ! sudo systemctl is-active --quiet travel-sales-agent; then
               echo 'ERROR: travel-sales-agent did not become active'
               sudo systemctl status travel-sales-agent --no-pager -l || true
-              sudo journalctl -u travel-sales-agent -n 80 --no-pager || true
+              sudo journalctl -u travel-sales-agent -n 100 --no-pager || true
               exit 1
             fi
-            sudo systemctl status travel-sales-agent --no-pager -l | tail -n 20
+            sudo systemctl status travel-sales-agent --no-pager -l | tail -n 25
 
             echo '=== HEALTH ==='
             curl -fsS http://127.0.0.1:8890/health
             echo
 
-            echo '=== AI + VM + CHROMIUM TEST ==='
-            RESPONSE="$(curl -fsS --max-time 120 -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"Use vm_exec now. Run this exact non-destructive browser test: if command -v chromium >/dev/null 2>&1; then chromium --headless --no-sandbox --disable-gpu --dump-dom https://example.com 2>/dev/null | grep -o \"<title>[^<]*</title>\" | head -1; elif command -v chromium-browser >/dev/null 2>&1; then chromium-browser --headless --no-sandbox --disable-gpu --dump-dom https://example.com 2>/dev/null | grep -o \"<title>[^<]*</title>\" | head -1; else echo CHROMIUM_NOT_FOUND; fi. Then reply with exactly the tool output."}')"
+            echo '=== AI + NATIVE CHROMIUM TEST ==='
+            RESPONSE="$(curl -fsS --max-time 180 -X POST http://127.0.0.1:8890/chat -H 'Content-Type: application/json' --data '{"message":"Use browser_navigate to open https://example.com, then use browser_snapshot. Report exactly the page title and URL returned by the tools."}')"
             printf '%s\n' "$RESPONSE"
-            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); assert "Example Domain" in c, d; print("AI_VM_CHROMIUM_OK")' "$RESPONSE"
+            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); c=d.get("choices",[{}])[0].get("message",{}).get("content",""); assert "Example Domain" in c and "example.com" in c, d; print("AI_NATIVE_CHROMIUM_OK")' "$RESPONSE"
 
-            echo '=== DEPLOYMENT VERIFIED ==='
+            echo '=== COMPANY AGENT READY ==='
