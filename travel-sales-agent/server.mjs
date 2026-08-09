@@ -192,11 +192,24 @@ const tools = [
   { type: 'function', function: { name: 'facebook_auth_status', description: 'Check whether the current persistent Facebook browser page appears authenticated.', parameters: { type: 'object', properties: {} } } }
 ];
 
-async function providerChat(messages, availableTools = tools) {
+async function providerChat(messages, availableTools = tools, options = {}) {
   let lastError;
   for (const model of MODELS) {
     try {
-      const r = await fetch(`${BASE_URL}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${API_KEY}` }, body: JSON.stringify({ model, messages, tools: availableTools, tool_choice: 'auto', max_tokens: 1800, temperature: 0.2 }) });
+      const requestBody = {
+        model,
+        messages,
+        tools: availableTools,
+        tool_choice: options.tool_choice ?? 'auto',
+        parallel_tool_calls: options.parallel_tool_calls ?? true,
+        max_tokens: options.max_tokens ?? 1800,
+        temperature: options.temperature ?? 0.2
+      };
+      const r = await fetch(`${BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${API_KEY}` },
+        body: JSON.stringify(requestBody)
+      });
       const text = await r.text();
       if (!r.ok) { lastError = new Error(`AI provider ${r.status} using ${model}: ${text.slice(0, 1000)}`); continue; }
       const result = JSON.parse(text);
