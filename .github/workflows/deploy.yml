@@ -27,28 +27,16 @@ jobs:
             echo '=== INSTALL ==='
             npm install --omit=dev
 
-            echo '=== LOCATE LEADPILOT AI_API_KEY ==='
-            KEY_SOURCE=''
-            for f in \
-              /home/azureuser/LeadPilotAI/.env \
-              /home/azureuser/leadpilotai/.env \
-              /home/azureuser/leadpilot/.env \
-              /etc/leadpilotai.env \
-              /etc/leadpilotai/agent.env; do
-              if [ -f "$f" ] && grep -q '^AI_API_KEY=' "$f"; then
-                KEY_SOURCE="$f"
-                break
-              fi
-            done
-            if [ -z "$KEY_SOURCE" ]; then
-              echo 'ERROR: AI_API_KEY was not found in the known LeadPilotAI environment locations.'
+            echo '=== LOCATE HUGGING FACE TOKEN ==='
+            if [ ! -f /home/azureuser/browser-use-bridge/.env ] || ! grep -q '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env; then
+              echo 'ERROR: HF_TOKEN is missing from /home/azureuser/browser-use-bridge/.env'
               exit 1
             fi
             sudo mkdir -p /etc/leadpilotai
-            sudo grep '^AI_API_KEY=' "$KEY_SOURCE" | sudo tee /etc/leadpilotai/agent.env >/dev/null
+            sudo grep '^HF_TOKEN=' /home/azureuser/browser-use-bridge/.env | sudo tee /etc/leadpilotai/agent.env >/dev/null
             sudo chmod 640 /etc/leadpilotai/agent.env
             sudo chown root:azureuser /etc/leadpilotai/agent.env
-            echo "AI_API_KEY source found: $KEY_SOURCE (value not printed)"
+            echo 'HF_TOKEN source found: /home/azureuser/browser-use-bridge/.env (value not printed)'
 
             echo '=== INSTALL TRAVEL AGENT SERVICE ==='
             sudo cp travel-sales-agent/travel-sales-agent.service /etc/systemd/system/travel-sales-agent.service
@@ -62,7 +50,7 @@ jobs:
             echo '=== TRAVEL AGENT HEALTH ==='
             curl -fsS http://127.0.0.1:8890/health
             echo
-            echo '=== FEATHERLESS SMOKE TEST ==='
+            echo '=== HUGGING FACE SMOKE TEST ==='
             curl -fsS -X POST http://127.0.0.1:8890/chat \
               -H 'Content-Type: application/json' \
               --data '{"message":"Hi, I need a flight from Cairo to Houston on August 20 for one adult. Ask me for any missing booking details."}' \
