@@ -24,38 +24,45 @@ jobs:
             git remote prune origin || true
             git fetch --prune origin main
             git reset --hard origin/main
+
             echo '=== NODE ==='
             /usr/bin/node --version
 
             echo '=== VERIFY TOKENS ==='
-            if [ ! -r .env ]; then
-              echo 'ERROR: /home/azureuser/browser-use-bridge/.env is missing or unreadable'
-              exit 1
-            fi
-            if grep -qE '^HF_TOKEN=[^[:space:]].*$' .env; then
-              echo 'HF_TOKEN: present'
-            else
-              echo 'HF_TOKEN: missing/empty'
-              exit 1
-            fi
-            if grep -qE '^VM_EXEC_TOKEN=[^[:space:]].*$' .env; then
-              echo 'VM_EXEC_TOKEN: present'
-            else
-              echo 'VM_EXEC_TOKEN: missing/empty'
-              exit 1
-            fi
+            test -r .env || { echo 'ERROR: .env missing/unreadable'; exit 1; }
+            grep -qE '^HF_TOKEN=[^[:space:]].*$' .env || { echo 'HF_TOKEN: missing/empty'; exit 1; }
+            grep -qE '^VM_EXEC_TOKEN=[^[:space:]].*$' .env || { echo 'VM_EXEC_TOKEN: missing/empty'; exit 1; }
+            echo 'HF_TOKEN: present'
+            echo 'VM_EXEC_TOKEN: present'
 
-            sudo install -m 640 -o root -g azureuser /dev/null /etc/leadpilotai-agent.env
-            grep '^HF_TOKEN=' .env | sudo tee /etc/leadpilotai-agent.env >/dev/null
-            grep '^VM_EXEC_TOKEN=' .env | sudo tee -a /etc/leadpilotai-agent.env >/dev/null
+            echo '=== INSTALL ENVIRONMENT ==='
+            sudo mkdir -p /etc/leadpilotai
+            sudo sh -c 'grep "^HF_TOKEN=" /home/azureuser/browser-use-bridge/.env > /etc/leadpilotai/agent.env'
+            sudo sh -c 'grep "^VM_EXEC_TOKEN=" /home/azureuser/browser-use-bridge/.env >> /etc/leadpilotai/agent.env'
+            sudo chown root:azureuser /etc/leadpilotai/agent.env
+            sudo chmod 640 /etc/leadpilotai/agent.env
+            sudo test -r /etc/leadpilotai/agent.env
+            echo 'Agent environment installed'
 
             echo '=== INSTALL/RESTART AGENT ==='
-            sudo cp travel-sales-agent/travel-sales-agent.service /etc/systemd/system/travel-sales-agent.service
+            sudo cp -f travel-sales-agent/travel-sales-agent.service /etc/systemd/system/travel-sales-agent.service
             sudo systemctl daemon-reload
-            sudo systemctl enable travel-sales-agent
-            sudo systemctl restart travel-sales-agent
+            sudo systemctl enable travel-sales-agent >/dev/null
+            sudo systemctl stop travel-sales-agent || true
+            # Ensure a stale process cannot hold the agent port.
+            sudo fuser -k 8890/tcp || true
+            sleep 1
+            sudo systemctl start travel-sales-agent
             sleep 3
-            sudo systemctl is-active --quiet travel-sales-agent
+
+            echo '=== SERVICE STATUS ==='
+            if ! sudo systemctl is-active --quiet travel-sales-agent; then
+              echo 'ERROR: travel-sales-agent did not become active'
+              sudo systemctl status travel-sales-agent --no-pager -l || true
+              sudo journalctl -u travel-sales-agent -n 80 --no-pager || true
+              exit 1
+            fi
+            sudo systemctl status travel-sales-agent --no-pager -l | tail -n 20
 
             echo '=== HEALTH ==='
             curl -fsS http://127.0.0.1:8890/health
