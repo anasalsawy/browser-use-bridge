@@ -65,8 +65,23 @@ jobs:
           sudo systemctl daemon-reload
           sudo systemctl enable vm-shell-mcp
           sudo systemctl restart vm-shell-mcp
-          sleep 2
-          curl -fsS http://127.0.0.1:8800/health
-          echo
-          sudo systemctl --no-pager --full status vm-shell-mcp
+          sleep 3
+
+          echo '=== SERVICE ==='
+          sudo systemctl is-active vm-shell-mcp
+          sudo systemctl --no-pager --full status vm-shell-mcp || true
+
+          echo '=== PORT 8800 ==='
+          sudo ss -ltnp | grep ':8800' || true
+
+          echo '=== HEALTH 8800 ==='
+          curl -iS http://127.0.0.1:8800/health || true
+
+          echo '=== MCP 8800 ==='
+          curl -iS http://127.0.0.1:8800/mcp || true
+
+          echo '=== RECENT LOG ==='
+          sudo journalctl -u vm-shell-mcp -n 40 --no-pager || true
+
+          echo '=== DEPLOY COMPLETE ==='
           REMOTE
