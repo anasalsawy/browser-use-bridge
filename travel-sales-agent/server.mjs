@@ -171,8 +171,9 @@ async function facebookAuthStatus() {
   const emailField = await page.locator('input[name="email"], input[type="email"]').filter({ visible: true }).count().catch(() => 0);
   const passwordField = await page.locator('input[name="pass"], input[type="password"]').filter({ visible: true }).count().catch(() => 0);
   const loginForm = emailField > 0 || passwordField > 0;
-  const authenticated = /facebook\.com/i.test(url) && !loginUrl && !loginForm && !checkpoint;
-  return JSON.stringify({ ok: true, authenticated, checkpoint, login_form: loginForm, url, title });
+  const cookies = await page.context().cookies('https://www.facebook.com').catch(() => []);
+  const authenticated = /facebook\.com/i.test(url) && !loginUrl && !loginForm && !checkpoint && cookies.some(c => c.name === 'c_user' && c.value) && cookies.some(c => c.name === 'xs' && c.value);
+  return JSON.stringify({ ok: true, authenticated, checkpoint, login_form: loginForm, cookie_session: authenticated, url, title });
 }
 
 const tools = [
@@ -243,9 +244,7 @@ async function executeTool(name, args) {
 async function handleChat(payload) {
   const messages = [{ role: 'system', content: SYSTEM_PROMPT }, ...(Array.isArray(payload.messages) ? payload.messages : []), ...(payload.message ? [{ role: 'user', content: String(payload.message) }] : [])];
   if (!messages.some(m => m.role === 'user')) throw new Error('message or messages is required');
-  const forceFacebookAuth = messages.some(m =>
-    typeof m.content === 'string' && /\bfacebook_authenticate\b/i.test(m.content)
-  );
+  const forceFacebookAuth = messages.some(m => typeof m.content === 'string' && /\bfacebook_authenticate\b/i.test(m.content));
   for (let round = 0; round < 12; round++) {
     const result = await providerChat(
       messages,
@@ -256,7 +255,17 @@ async function handleChat(payload) {
     );
     const msg = result.choices[0].message;
     messages.push(msg);
-    if (!msg.tool_calls?.length) return result;
+    if (!msg.tool_calls?.length) {
+      if (forceFacebookAuth && round === 0) {
+        // Some OpenAI-compatible gateways/models ignore a forced tool_choice and return prose.
+        // Do not allow that to turn an authentication request into a false negative.
+        const output = await executeTool('facebook_authenticate', {});
+        messages.push({ role: 'assistant', content: null, tool_calls: [{ id: 'forced-facebook-auth', type: 'function', function: { name: 'facebook_authenticate', arguments: '{}' } }] });
+        messages.push({ role: 'tool', tool_call_id: 'forced-facebook-auth', content: output });
+        continue;
+      }
+      return result;
+    }
     for (const call of msg.tool_calls) {
       let output;
       try { output = await executeTool(call.function.name, JSON.parse(call.function.arguments || '{}')); }
