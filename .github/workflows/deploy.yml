@@ -28,13 +28,26 @@ jobs:
             /usr/bin/node --version
 
             echo '=== VERIFY TOKENS ==='
-            test -f .env
-            grep '^HF_TOKEN=' .env >/dev/null || { echo 'ERROR: HF_TOKEN missing'; exit 1; }
-            grep '^VM_EXEC_TOKEN=' .env >/dev/null || { echo 'ERROR: VM_EXEC_TOKEN missing'; exit 1; }
+            if [ ! -r .env ]; then
+              echo 'ERROR: /home/azureuser/browser-use-bridge/.env is missing or unreadable'
+              exit 1
+            fi
+            if grep -qE '^HF_TOKEN=[^[:space:]].*$' .env; then
+              echo 'HF_TOKEN: present'
+            else
+              echo 'HF_TOKEN: missing/empty'
+              exit 1
+            fi
+            if grep -qE '^VM_EXEC_TOKEN=[^[:space:]].*$' .env; then
+              echo 'VM_EXEC_TOKEN: present'
+            else
+              echo 'VM_EXEC_TOKEN: missing/empty'
+              exit 1
+            fi
+
+            sudo install -m 640 -o root -g azureuser /dev/null /etc/leadpilotai-agent.env
             grep '^HF_TOKEN=' .env | sudo tee /etc/leadpilotai-agent.env >/dev/null
             grep '^VM_EXEC_TOKEN=' .env | sudo tee -a /etc/leadpilotai-agent.env >/dev/null
-            sudo chmod 640 /etc/leadpilotai-agent.env
-            sudo chown root:azureuser /etc/leadpilotai-agent.env
 
             echo '=== INSTALL/RESTART AGENT ==='
             sudo cp travel-sales-agent/travel-sales-agent.service /etc/systemd/system/travel-sales-agent.service
