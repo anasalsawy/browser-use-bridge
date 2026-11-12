@@ -54,7 +54,6 @@ class Session:
         self.previous_text = current
 
 
-@nnsight.trace
 def _local_token(token: Any, session_id: str):
     # This function runs on the adapter through nnsight.local(), not on GPU.
     with SESSIONS_LOCK:
