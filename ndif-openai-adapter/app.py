@@ -6,6 +6,10 @@ from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from tooling import prepared_messages, choose_functions, render_prompt, parse_calls
+# NNsight installs object.save() globally. AnyIO's TypedAttributeSet rejects
+# that injected method if its asyncio backend is imported afterward.
+# Load the backend before importing NNsight through streaming.py.
+import anyio._backends._asyncio
 from streaming import begin, cancel, forget, SESSIONS, SESSIONS_LOCK
 
 app = FastAPI(title="NDIF OpenAI Adapter", version="0.1.0")
