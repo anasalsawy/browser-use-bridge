@@ -2,9 +2,11 @@
 import asyncio, hmac, json, os, re, time, uuid
 from functools import lru_cache
 from typing import Any
-from fastapi import FastAPI, Depends, Header, HTTPException
+from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from tooling import prepared_messages, choose_functions, render_prompt, parse_calls
+from streaming import begin, cancel, forget, SESSIONS, SESSIONS_LOCK
 
 app = FastAPI(title="NDIF OpenAI Adapter", version="0.1.0")
 
@@ -38,119 +40,134 @@ class ChatRequest(BaseModel):
     tools: list[dict[str, Any]] | None = None
     tool_choice: Any = None
 
-def normalize_messages(messages):
-    result = []
-    for msg in messages:
-        role = msg.get("role")
-        if role not in ("system", "developer", "user", "assistant", "tool"):
-            raise HTTPException(400, "Unsupported role")
-        content = msg.get("content") or ""
-        if isinstance(content, list):
-            if any(isinstance(p, dict) and p.get("type") != "text" for p in content):
-                raise HTTPException(400, "Only text content is supported")
-            content = "\n".join(p.get("text", "") for p in content if isinstance(p, dict))
-        if not isinstance(content, str):
-            raise HTTPException(400, "Only text content is supported")
-        if msg.get("tool_calls"):
-            content += "\nPreviously emitted tool calls: " + json.dumps(msg["tool_calls"], ensure_ascii=False)
-        if role == "tool":
-            content = "Tool result" + (" (" + msg["tool_call_id"] + ")" if msg.get("tool_call_id") else "") + ": " + content
-            role = "user"
-        elif role == "developer":
-            role = "system"
-        result.append({"role": role, "content": content})
-    return result
 
-def tool_system_prompt(tools):
-    funs = [x.get("function", {}) for x in tools if x.get("type") == "function"]
-    if not funs:
-        raise HTTPException(400, "Only function tools are supported")
-    return ('You have the following functions. To call functions, output ONLY a JSON object: '
-            '{"tool_calls":[{"name":"function_name","arguments":{}}]}. '
-            'Otherwise respond normally. Functions: ' + json.dumps(funs, ensure_ascii=False))
-
-def parse_calls(answer, tools):
-    if not tools:
-        return None
-    s = answer.strip()
-    if s.startswith("```"):
-        s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s)
-    try:
-        payload = json.loads(s)
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(payload, dict) or not isinstance(payload.get("tool_calls"), list):
-        return None
-    allowed = {t.get("function", {}).get("name") for t in tools if t.get("type") == "function"}
-    result = []
-    for c in payload["tool_calls"]:
-        if not isinstance(c, dict) or c.get("name") not in allowed or not isinstance(c.get("arguments"), dict):
-            return None
-        result.append({"id": "call_" + uuid.uuid4().hex[:24], "type": "function",
-                       "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], ensure_ascii=False)}})
-    return result or None
 
 @lru_cache(maxsize=8)
 def load_model(model_id):
     from nnsight import TransformersModel
     return TransformersModel(model_id, task="text-generation")
 
-def generate(model_id, messages, max_tokens, temperature, top_p):
+
+def prepare(req):
+    if req.model not in models_allowed():
+        raise HTTPException(404, "Unknown configured model")
+    model = load_model(req.model)
+    funcs, choice = choose_functions(req.tools, req.tool_choice)
+    messages = prepared_messages(req.messages)
+    prompt = render_prompt(model.tokenizer, messages, funcs, choice)
+    token_ids = model.tokenizer.encode(prompt, add_special_tokens=False)
+    limit = req.max_completion_tokens or req.max_tokens or 512
+    options = {"max_new_tokens": limit, "do_sample": req.temperature is not None and req.temperature > 0}
+    if options["do_sample"]:
+        options["temperature"] = req.temperature
+        if req.top_p is not None:
+            options["top_p"] = req.top_p
+    return model, prompt, token_ids, options, funcs, choice
+
+
+def generate(model, prompt, prompt_ids, options):
     from nnsight import CONFIG
     CONFIG.API.HOST = os.getenv("NDIF_HOST", "https://api.ndif.us")
     CONFIG.API.APIKEY = config()[0]
     CONFIG.APP.REMOTE_LOGGING = False
-    model = load_model(model_id)
-    tokenizer = model.tokenizer
-    if getattr(tokenizer, "chat_template", None):
-        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    else:
-        prompt = "\n".join(x["role"].upper() + ": " + x["content"] for x in messages) + "\nASSISTANT:"
-    prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-    opts = {"max_new_tokens": max_tokens, "do_sample": temperature is not None and temperature > 0}
-    if opts["do_sample"]:
-        opts["temperature"] = temperature
-        if top_p is not None:
-            opts["top_p"] = top_p
-    with model.generate(prompt, remote=True, **opts) as tracer:
+    with model.generate(prompt, remote=True, **options) as tracer:
         tokens = tracer.result.save()
     ids = tokens[0].tolist() if hasattr(tokens[0], "tolist") else list(tokens[0])
-    completion = ids[len(prompt_ids):]
-    if not completion:
-        raise RuntimeError("NDIF returned no completion or incompatible sequence")
-    return tokenizer.decode(completion, skip_special_tokens=True), len(prompt_ids), len(completion)
+    if ids[:len(prompt_ids)] != prompt_ids:
+        raise RuntimeError("NDIF generation prompt tokens do not match input")
+    completion_ids = ids[len(prompt_ids):]
+    return model.tokenizer.decode(completion_ids, skip_special_tokens=True), len(prompt_ids), len(completion_ids)
+
+
 
 async def completion(req):
-    if req.model not in models_allowed():
-        raise HTTPException(404, "Unknown configured model")
-    messages = normalize_messages(req.messages)
-    if req.tools and req.tool_choice != "none":
-        messages.insert(0, {"role": "system", "content": tool_system_prompt(req.tools)})
-    limit = req.max_completion_tokens or req.max_tokens or 512
+    model, prompt, prompt_ids, options, funcs, choice = prepare(req)
     try:
-        answer, in_tokens, out_tokens = await asyncio.to_thread(generate, req.model, messages, limit, req.temperature, req.top_p)
+        answer, in_tokens, out_tokens = await asyncio.to_thread(generate, model, prompt, prompt_ids, options)
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(502, {"error": {"message": "NDIF generation failed; inspect server logs and model availability",
+        raise HTTPException(502, {"error": {"message": "NDIF generation failed; inspect server logs",
                                            "type": "upstream_error", "exception": type(exc).__name__}}) from exc
-    calls = parse_calls(answer, req.tools if req.tool_choice != "none" else None)
-    message = {"role": "assistant", "content": None if calls else answer}
+    calls, text = parse_calls(answer, funcs, choice)
+    message = {"role": "assistant", "content": text}
     if calls:
         message["tool_calls"] = calls
     return {"id": "chatcmpl-" + uuid.uuid4().hex, "object": "chat.completion", "created": int(time.time()),
             "model": req.model,
-            "choices": [{"index": 0, "message": message, "finish_reason": "tool_calls" if calls else ("length" if out_tokens >= limit else "stop")}],
+            "choices": [{"index": 0, "message": message,
+                         "finish_reason": "tool_calls" if calls else ("length" if out_tokens >= options["max_new_tokens"] else "stop")}],
             "usage": {"prompt_tokens": in_tokens, "completion_tokens": out_tokens, "total_tokens": in_tokens + out_tokens}}
 
-def sse(result):
-    base = {k: result[k] for k in ("id", "model", "created")}
-    base["object"] = "chat.completion.chunk"
-    choice = result["choices"][0]
-    for delta, reason in (({"role": "assistant"}, None),
-                          ({"tool_calls": [{"index": i, **c} for i, c in enumerate(choice["message"]["tool_calls"])]}
-                           if choice["message"].get("tool_calls") else {"content": choice["message"]["content"]}, None),
-                          ({}, choice["finish_reason"])):
-        yield "data: " + json.dumps({**base, "choices": [{"index": 0, "delta": delta, "finish_reason": reason}]}) + "\n\n"
-    yield "data: [DONE]\n\n"
+
+
+def event_chunk(request_id, model, delta, finish_reason=None):
+    return "data: " + json.dumps({
+        "id": request_id, "object": "chat.completion.chunk", "created": int(time.time()),
+        "model": model, "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}]
+    }) + "\\n\\n"
+
+
+async def live_stream(session, req, request, funcs, choice):
+    request_id = "chatcmpl-" + session.ident
+    fragments = []
+    try:
+        yield event_chunk(request_id, req.model, {"role": "assistant"})
+        while True:
+            if session.cancel.is_set() or await request.is_disconnected():
+                break
+            try:
+                kind, value = await asyncio.wait_for(session.queue.get(), timeout=0.25)
+            except asyncio.TimeoutError:
+                continue
+            if kind == "delta":
+                fragments.append(value)
+                # Native Qwen tool-call markers must be parsed as a complete JSON
+                # object; do not leak tool markup as assistant chat text.
+                if not funcs:
+                    yield event_chunk(request_id, req.model, {"content": value})
+            elif kind == "error":
+                yield "event: error\\ndata: " + json.dumps({"error": {"message": value}}) + "\\n\\n"
+                break
+            elif kind == "done":
+                answer = "".join(fragments)
+                if funcs:
+                    try:
+                        calls, remaining = parse_calls(answer, funcs, choice)
+                    except HTTPException as exc:
+                        yield "event: error\\ndata: " + json.dumps({"error": {"message": str(exc.detail)}}) + "\\n\\n"
+                        break
+                    if calls:
+                        yield event_chunk(request_id, req.model, {
+                            "tool_calls": [{"index": i, **c} for i, c in enumerate(calls)]})
+                        reason = "tool_calls"
+                    else:
+                        if remaining:
+                            yield event_chunk(request_id, req.model, {"content": remaining})
+                        reason = "stop"
+                else:
+                    reason = "stop"
+                yield event_chunk(request_id, req.model, {}, reason)
+                yield "data: [DONE]\\n\\n"
+                break
+            elif kind == "worker_done":
+                # Stream worker completed without a terminal event.
+                break
+    finally:
+        cancel(session)
+        forget(session)
+
+
+@app.post("/v1/requests/{request_id}/cancel", dependencies=[Depends(auth)])
+async def cancel_request(request_id: str):
+    with SESSIONS_LOCK:
+        session = SESSIONS.get(request_id)
+    if session is None:
+        raise HTTPException(404, "Request is not active on this gateway replica")
+    cancel(session)
+    return {"id": request_id, "status": "local_stream_stopped",
+            "upstream_gpu_cancellation_confirmed": False}
+
 
 @app.get("/health")
 def health():
@@ -161,13 +178,19 @@ def models():
     now = int(time.time())
     return {"object": "list", "data": [{"id": m, "object": "model", "created": now, "owned_by": "ndif"} for m in models_allowed()]}
 
+
 @app.post("/v1/chat/completions", dependencies=[Depends(auth)])
-async def chat(req: ChatRequest):
-    result = await completion(req)
-    if req.stream:
-        return StreamingResponse(sse(result), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-    return result
+async def chat(req: ChatRequest, request: Request):
+    if not req.stream:
+        return await completion(req)
+    model, prompt, prompt_ids, options, funcs, choice = prepare(req)
+    loop = asyncio.get_running_loop()
+    session = begin(model, model.tokenizer, prompt, options, loop)
+    return StreamingResponse(
+        live_stream(session, req, request, funcs, choice), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                 "X-NDIF-Request-ID": session.ident})
+
 
 class ResponseRequest(BaseModel):
     model: str
