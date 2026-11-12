@@ -105,7 +105,7 @@ def event_chunk(request_id, model, delta, finish_reason=None):
     return "data: " + json.dumps({
         "id": request_id, "object": "chat.completion.chunk", "created": int(time.time()),
         "model": model, "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}]
-    }) + "\\n\\n"
+    }) + "\n\n"
 
 
 async def live_stream(session, req, request, funcs, choice):
@@ -127,7 +127,7 @@ async def live_stream(session, req, request, funcs, choice):
                 if not funcs:
                     yield event_chunk(request_id, req.model, {"content": value})
             elif kind == "error":
-                yield "event: error\\ndata: " + json.dumps({"error": {"message": value}}) + "\\n\\n"
+                yield "event: error\ndata: " + json.dumps({"error": {"message": value}}) + "\n\n"
                 break
             elif kind == "done":
                 answer = "".join(fragments)
@@ -135,7 +135,7 @@ async def live_stream(session, req, request, funcs, choice):
                     try:
                         calls, remaining = parse_calls(answer, funcs, choice)
                     except HTTPException as exc:
-                        yield "event: error\\ndata: " + json.dumps({"error": {"message": str(exc.detail)}}) + "\\n\\n"
+                        yield "event: error\ndata: " + json.dumps({"error": {"message": str(exc.detail)}}) + "\n\n"
                         break
                     if calls:
                         yield event_chunk(request_id, req.model, {
@@ -148,7 +148,7 @@ async def live_stream(session, req, request, funcs, choice):
                 else:
                     reason = "stop"
                 yield event_chunk(request_id, req.model, {}, reason)
-                yield "data: [DONE]\\n\\n"
+                yield "data: [DONE]\n\n"
                 break
             elif kind == "worker_done":
                 # Stream worker completed without a terminal event.
