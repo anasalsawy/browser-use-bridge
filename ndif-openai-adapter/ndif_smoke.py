@@ -23,7 +23,7 @@ def main():
         log("STATUS_OK", str(available)[:9000])
     except Exception as exc:
         log("STATUS_FAIL", type(exc).__name__, str(exc)[:900])
-    model_id = os.getenv("NDIF_SMOKE_MODEL", "Qwen/Qwen3-8B")
+    model_id = os.getenv("NDIF_SMOKE_MODEL", "Qwen/Qwen3.8-27B")
     log("GENERATE_BEGIN", model_id)
     start = time.monotonic()
     try:
@@ -32,7 +32,34 @@ def main():
             result = tracer.result.save()
         output = model.tokenizer.decode(result[0], skip_special_tokens=True)
         log("GENERATE_OK", "seconds", round(time.monotonic() - start, 2), "response", repr(output[:600]))
-        return 0
+        import asyncio
+        import httpx
+
+        async def adapter_check():
+            # ASGI in-process HTTP, matching client auth/JSON without external DNS.
+            from app import app
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://adapter-internal", timeout=100) as client:
+                resp = await client.post(
+                    "/v1/chat/completions",
+                    headers={"Authorization": "Bearer " + os.environ["GATEWAY_API_KEY"]},
+                    json={"model": model_id, "messages": [
+                        {"role": "user", "content": "Answer with a single word: what is the capital of France?"}],
+                        "max_tokens": 12}
+                )
+                try:
+                    data = resp.json()
+                except ValueError:
+                    data = {"raw": resp.text[:700]}
+                if resp.status_code == 200:
+                    log("GATEWAY_OK", "status", resp.status_code, "response",
+                        repr(data.get("choices", [{}])[0].get("message", {}).get("content", "")[:300]))
+                else:
+                    log("GATEWAY_FAIL", "status", resp.status_code, "detail", repr(data)[:900])
+                return resp.status_code == 200
+
+        passed = asyncio.run(adapter_check())
+        return 0 if passed else 3
     except Exception as exc:
         log("GENERATE_FAIL", type(exc).__name__, str(exc)[:1300])
         log("TRACE", "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-3000:])
