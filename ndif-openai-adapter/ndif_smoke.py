@@ -23,7 +23,7 @@ def main():
         log("STATUS_OK", str(available)[:9000])
     except Exception as exc:
         log("STATUS_FAIL", type(exc).__name__, str(exc)[:900])
-    model_id = os.getenv("NDIF_SMOKE_MODEL", "meta-llama/Llama-3.1-8B")
+    model_id = os.getenv("NDIF_SMOKE_MODEL", "Qwen/Qwen3-8B")
     log("GENERATE_BEGIN", model_id)
     start = time.monotonic()
     try:
