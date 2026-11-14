@@ -1,6 +1,16 @@
 """One-shot NDIF remote generation diagnostic. No keys printed.
 Run only from the existing gateway deployment with NDIF_API_KEY set.
 """
+# anyio's TypedAttributeSet.__init_subclass__ rejects attributes without type
+# annotations. nnsight injects an un-annotated .save() method onto all tensor
+# objects at import time. If anyio's asyncio backend loads AFTER nnsight, it
+# encounters .save() on the SocketAttribute TypedAttributeSet and raises
+#   TypeError: Attribute 'save' is missing its type annotation
+# Fix: force-import anyio's asyncio backend before nnsight ever loads, so
+# TypedAttributeSet is fully initialized and its __init_subclass__ has already
+# run before nnsight patches anything.
+import anyio._backends._asyncio  # noqa: F401 — must stay FIRST
+
 import os
 import sys
 import time
