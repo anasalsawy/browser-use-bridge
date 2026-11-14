@@ -75,6 +75,35 @@ def choose_functions(tools, choice):
 
 
 def render_prompt(tokenizer, messages, functions, choice):
+    """Render messages+tools into a plain text prompt for sync.
+
+    When tokenizer is None (proxy mode), we serialize as a structured text
+    block that the model can parse. When a tokenizer is provided, we use its
+    native chat template (legacy direct-NDIF path).
+    """
+    if tokenizer is None:
+        # Proxy mode: build a plain-text prompt the sync runtime can consume.
+        parts = []
+        if functions:
+            tools_json = json.dumps(
+                [{"type": "function", "function": f} for f in functions],
+                ensure_ascii=False, indent=2)
+            parts.append(f"Available tools:\n{tools_json}")
+            if choice == "required":
+                parts.append("You MUST call one of the available tools.")
+        for m in messages:
+            role = m.get("role", "")
+            content = m.get("content", "") or ""
+            if role == "system":
+                parts.append(content)
+            elif role == "user":
+                parts.append(content)
+            elif role == "assistant":
+                parts.append(content)
+            elif role == "tool":
+                parts.append(f"[tool result] {content}")
+        return "\n\n".join(p for p in parts if p)
+
     if not getattr(tokenizer, "chat_template", None):
         raise HTTPException(422, "Model tokenizer lacks chat_template")
     if functions:
