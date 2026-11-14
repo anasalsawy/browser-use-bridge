@@ -33,10 +33,9 @@ def main():
         log("STATUS_OK", str(available)[:9000])
     except Exception as exc:
         log("STATUS_FAIL", type(exc).__name__, str(exc)[:900])
-    # Use NDIF_MODELS first (matches the gateway config), then NDIF_SMOKE_MODEL,
-    # then fall back to Qwen3-8B which exists on HF Hub for tokenizer loading.
-    _default = os.getenv("NDIF_MODELS", "Qwen/Qwen3-8B").split(",")[0].strip()
-    model_id = os.getenv("NDIF_SMOKE_MODEL", _default)
+    # NDIF_BACKEND_MODEL is the real HF model ID sent to NDIF (e.g. Qwen/Qwen3-8B).
+    # NDIF_MODELS is the alias Cursor sees (e.g. gpt-4o) — not a valid HF ID.
+    model_id = os.getenv("NDIF_SMOKE_MODEL", os.getenv("NDIF_BACKEND_MODEL", "Qwen/Qwen3-8B"))
     log("GENERATE_BEGIN", model_id)
     start = time.monotonic()
     try:

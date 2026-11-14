@@ -31,7 +31,11 @@ def auth(authorization: str | None = Header(None)):
         raise HTTPException(401, "Invalid gateway API key")
 
 def models_allowed():
-    return [m.strip() for m in os.getenv("NDIF_MODELS", "Qwen/Qwen3-8B").split(",") if m.strip()]
+    return [m.strip() for m in os.getenv("NDIF_MODELS", "gpt-4o").split(",") if m.strip()]
+
+def ndif_model_id():
+    # The real HuggingFace/NDIF model to run — decoupled from the alias Cursor sees.
+    return os.getenv("NDIF_BACKEND_MODEL", "Qwen/Qwen3-8B")
 
 class ChatRequest(BaseModel):
     model: str
@@ -55,7 +59,7 @@ def load_model(model_id):
 def prepare(req):
     if req.model not in models_allowed():
         raise HTTPException(404, "Unknown configured model")
-    model = load_model(req.model)
+    model = load_model(ndif_model_id())
     funcs, choice = choose_functions(req.tools, req.tool_choice)
     messages = prepared_messages(req.messages)
     prompt = render_prompt(model.tokenizer, messages, funcs, choice)
