@@ -33,7 +33,10 @@ def main():
         log("STATUS_OK", str(available)[:9000])
     except Exception as exc:
         log("STATUS_FAIL", type(exc).__name__, str(exc)[:900])
-    model_id = os.getenv("NDIF_SMOKE_MODEL", "Qwen/Qwen3.8-27B")
+    # Use NDIF_MODELS first (matches the gateway config), then NDIF_SMOKE_MODEL,
+    # then fall back to Qwen3-8B which exists on HF Hub for tokenizer loading.
+    _default = os.getenv("NDIF_MODELS", "Qwen/Qwen3-8B").split(",")[0].strip()
+    model_id = os.getenv("NDIF_SMOKE_MODEL", _default)
     log("GENERATE_BEGIN", model_id)
     start = time.monotonic()
     try:

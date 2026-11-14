@@ -31,7 +31,7 @@ def auth(authorization: str | None = Header(None)):
         raise HTTPException(401, "Invalid gateway API key")
 
 def models_allowed():
-    return [m.strip() for m in os.getenv("NDIF_MODELS", "Qwen/Qwen3.8-27B").split(",") if m.strip()]
+    return [m.strip() for m in os.getenv("NDIF_MODELS", "Qwen/Qwen3-8B").split(",") if m.strip()]
 
 class ChatRequest(BaseModel):
     model: str
